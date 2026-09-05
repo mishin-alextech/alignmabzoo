@@ -206,3 +206,45 @@
 
 ### Тесты
 Не проводились (по правилу: тесты только по явному указанию пользователя).
+
+---
+
+## 2026-09-05. Исправление ошибок TypeScript (TS7053) при сборке фронтенда
+
+### Проблема
+`docker compose build` падал на шаге `npm run build`:
+
+```
+src/components/JobWizard.tsx(147,46): error TS7053: Element implicitly has an 'any'
+type because expression of type 'string' can't be used to index type
+'{ [x: `${string}\0${string}`]: string[]; }'.
+src/components/JobWizard.tsx(154,46): error TS7053: ... type
+'{ [x: `${string}\0${string}`]: boolean; }'.
+```
+
+### Причина
+`Object.keys()` возвращает `string[]`, а ключи `selectedGroups`/`allGroups`
+типизированы как `ProjectKey` (шаблонный тип `` `${string}\u0000${string}` ``).
+Индексация объекта с индексным сигнатурой `ProjectKey` обычным `string`
+запрещена TypeScript (строки из `Object.keys` не сужаются до шаблонного типа).
+
+### Изменения
+
+#### `frontend/src/components/JobWizard.tsx`
+- `toggleAnimal`: очистка `selectedGroups`/`allGroups` при снятии животного —
+  вместо `delete next[key]` по `string`-ключам строится новый объект с
+  явным типом (`Record<ProjectKey, string[]>` / `Record<ProjectKey, boolean>`),
+  ключи приводятся: `Object.keys(current) as ProjectKey[]`.
+- `setProjectAllGroups`: `Object.fromEntries(...)` теперь возвращает объект
+  с индексным сигнатурой `ProjectKey` (явные `as const` в кортежах),
+  результат сливается через spread с текущим состоянием.
+- `toggleGroup` (ветка `applyToAll`): аналогично — `Object.fromEntries` с
+  `as const` + spread.
+
+### Тесты
+Локальная сборка `npm run build` (tsc -b && vite build) — успешна, ошибок нет.
+
+### Дополнительно
+- Коммит `ebc7cab` случайно включил артефакты сборки (`package-lock.json`,
+  `*.tsbuildinfo`, `vite.config.js/d.ts`) — в коммите `a99174a` они удалены
+  из репозитория и добавлены в `.gitignore`.
