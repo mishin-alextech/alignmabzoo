@@ -7,7 +7,7 @@ import re
 from typing import Final, Literal
 
 
-ChainGroup = Literal["VHeavy", "VKappa", "VLambda", "Other"]
+ChainGroup = Literal["VHeavy", "VHH", "VKappa", "VLambda", "Other"]
 
 
 _PROJECT_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(r"-\d")
@@ -17,6 +17,7 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "VH": "VHeavy",
     "HeavyC": "VHeavy",
     "VHeavy": "VHeavy",
+    "VHH": "VHH",
     "VK": "VKappa",
     "VK1": "VKappa",
     "V1K": "VKappa",

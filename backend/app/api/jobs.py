@@ -98,11 +98,16 @@ async def get_report(job_id: JobId, registry: RegistryDependency) -> JSONRespons
     return _json_artifact(registry, job_id, "report.json")
 
 
-@router.get("/{job_id}/alignment.aln")
-async def download_alignment(job_id: JobId, registry: RegistryDependency) -> FileResponse:
-    """Скачивает сформированное Clustal-выравнивание."""
+@router.get("/{job_id}/alignments/{filename}")
+async def download_alignment(
+    job_id: JobId, filename: str, registry: RegistryDependency
+) -> FileResponse:
+    """Скачивает одно из выравниваний Clustal по типу цепи."""
 
-    return _file_artifact(registry, job_id, "alignment/alignment.aln", "alignment.aln")
+    allowed = {"vheavy.aln", "vkappa.aln", "vlambda.aln"}
+    if filename not in allowed:
+        raise HTTPException(status_code=400, detail="Указано недопустимое имя файла выравнивания.")
+    return _file_artifact(registry, job_id, f"alignment/{filename}", filename)
 
 
 @router.get("/{job_id}/anarci/{filename}")

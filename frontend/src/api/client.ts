@@ -196,8 +196,8 @@ export const api = {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/report`)
   },
 
-  alignmentDownloadUrl(jobId: string): string {
-    return `/api/jobs/${encodeURIComponent(jobId)}/alignment.aln`
+  alignmentDownloadUrl(jobId: string, filename: 'vheavy.aln' | 'vkappa.aln' | 'vlambda.aln'): string {
+    return `/api/jobs/${encodeURIComponent(jobId)}/alignments/${encodeURIComponent(filename)}`
   },
 
   reportDownloadUrl(jobId: string): string {

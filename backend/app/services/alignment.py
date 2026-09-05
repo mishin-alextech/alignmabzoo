@@ -22,8 +22,13 @@ from app.services.cdr_extract import (
 )
 
 
-CHAIN_GROUP_ORDER: tuple[str, ...] = ("VHeavy", "VKappa", "VLambda", "Other")
+CHAIN_GROUP_ORDER: tuple[str, ...] = ("VHeavy", "VHH", "VKappa", "VLambda", "Other")
 _GROUP_PRIORITY = {group: index for index, group in enumerate(CHAIN_GROUP_ORDER)}
+ALIGNMENT_BATCHES: dict[str, tuple[str, ...]] = {
+    "vheavy": ("VHeavy", "VHH"),
+    "vkappa": ("VKappa",),
+    "vlambda": ("VLambda",),
+}
 _SAFE_MSA_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,30}$")
 
 
@@ -53,6 +58,15 @@ class ClustaloRunResult:
         return self.error is None and self.command_result is not None and self.command_result.succeeded
 
 
+@dataclass(frozen=True, slots=True)
+class ClustaloBatchResult:
+    """Результат отдельного выравнивания родственных групп цепей."""
+
+    batch_name: str
+    records: tuple[AlignmentInput, ...]
+    result: ClustaloRunResult
+
+
 def sort_alignment_inputs(records: Sequence[AlignmentInput]) -> list[AlignmentInput]:
     """Сортирует MSA в обязательном порядке групп и затем по имени файла."""
 
@@ -61,16 +75,17 @@ def sort_alignment_inputs(records: Sequence[AlignmentInput]) -> list[AlignmentIn
 
 def write_alignment_input(
     records: Sequence[AlignmentInput],
+    filename: str,
     *,
     job_directory: str | Path,
     jobs_root: str | Path,
 ) -> Path:
-    """Создаёт ``alignment/input.fasta`` только внутри переданной job."""
+    """Создаёт входной FASTA одной группы выравнивания внутри job."""
 
     job_path = validate_job_directory(job_directory, jobs_root)
     alignment_directory = job_child_path(job_path, "alignment")
     alignment_directory.mkdir(parents=True, exist_ok=True)
-    output_path = alignment_directory / "input.fasta"
+    output_path = alignment_directory / filename
     lines: list[str] = []
     for record in sort_alignment_inputs(records):
         _validate_fasta_record(record)
@@ -110,13 +125,13 @@ def msa_identifier(sequence_name: str) -> str:
     return f"seq_{digest}"
 
 
-def run_clustalo(
+def run_clustalo_batches(
     records: Sequence[AlignmentInput],
     *,
     job_directory: str | Path,
     jobs_root: str | Path,
-) -> ClustaloRunResult:
-    """Создаёт вход MSA и запускает Clustal Omega в каталоге job.
+) -> tuple[ClustaloBatchResult, ...]:
+    """Создаёт три независимых MSA: VHeavy с VHH, VKappa и VLambda.
 
     Ошибка инструмента возвращается как данные, чтобы job-слой мог
     зафиксировать её в отчёте и логе. Функция не читает и не изменяет
@@ -124,27 +139,36 @@ def run_clustalo(
     """
 
     job_path = validate_job_directory(job_directory, jobs_root)
-    input_path = write_alignment_input(records, job_directory=job_path, jobs_root=jobs_root)
-    output_path = job_child_path(job_path, "alignment", "alignment.aln")
-    if shutil.which("clustalo") is None:
-        return ClustaloRunResult(
-            input_path=input_path,
-            output_path=output_path,
-            command_result=None,
-            error="Окружение обработки неисправно: не найдена команда clustalo.",
+    results: list[ClustaloBatchResult] = []
+    for batch_name, source_groups in ALIGNMENT_BATCHES.items():
+        batch_records = tuple(record for record in records if record.group in source_groups)
+        if not batch_records:
+            continue
+        input_path = write_alignment_input(
+            batch_records,
+            f"{batch_name}.fasta",
+            job_directory=job_path,
+            jobs_root=jobs_root,
         )
-    if not records:
-        return ClustaloRunResult(
-            input_path=input_path,
-            output_path=output_path,
-            command_result=None,
-            error="Невозможно выполнить выравнивание без последовательностей.",
-        )
-
-    command = build_clustalo_command(input_path, output_path)
-    command_result = _run_command(command, cwd=job_path)
-    error = _clustalo_result_error(command_result, output_path)
-    return ClustaloRunResult(input_path, output_path, command_result, error)
+        output_path = job_child_path(job_path, "alignment", f"{batch_name}.aln")
+        if shutil.which("clustalo") is None:
+            result = ClustaloRunResult(
+                input_path=input_path,
+                output_path=output_path,
+                command_result=None,
+                error="Окружение обработки неисправно: не найдена команда clustalo.",
+            )
+        else:
+            command = build_clustalo_command(input_path, output_path)
+            command_result = _run_command(command, cwd=job_path)
+            result = ClustaloRunResult(
+                input_path=input_path,
+                output_path=output_path,
+                command_result=command_result,
+                error=_clustalo_result_error(command_result, output_path),
+            )
+        results.append(ClustaloBatchResult(batch_name, batch_records, result))
+    return tuple(results)
 
 
 def parse_clustal_alignment(path: str | Path) -> dict[str, str]:

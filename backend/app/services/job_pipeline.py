@@ -14,7 +14,7 @@ from app.services.alignment import (
     AlignmentInput,
     build_alignment_document,
     parse_clustal_alignment,
-    run_clustalo,
+    run_clustalo_batches,
     write_alignment_document,
 )
 from app.services.anarci_runner import (
@@ -170,16 +170,20 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     report["errors"].append({"path": "ANARCI", "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
                     _append_log(job_directory, f"Ошибка ANARCI для схемы {scheme_result.scheme}: {reason}")
         if parsed_records:
-            clustalo = run_clustalo(parsed_records, job_directory=job_directory, jobs_root=registry.jobs_root)
-            _log_command(job_directory, clustalo.command_result)
-            if clustalo.succeeded:
-                aligned = parse_clustal_alignment(clustalo.output_path)
-                document = build_alignment_document(parsed_records, aligned, numberings)
+            aligned_records: list[AlignmentInput] = []
+            aligned: dict[str, str] = {}
+            for batch in run_clustalo_batches(parsed_records, job_directory=job_directory, jobs_root=registry.jobs_root):
+                _log_command(job_directory, batch.result.command_result)
+                if batch.result.succeeded:
+                    aligned.update(parse_clustal_alignment(batch.result.output_path))
+                    aligned_records.extend(batch.records)
+                else:
+                    reason = batch.result.error or "Непредвиденная ошибка Clustal Omega."
+                    report["errors"].append({"path": f"alignment/{batch.batch_name}", "reason": reason})
+                    _append_log(job_directory, f"Ошибка выравнивания {batch.batch_name}: {reason}")
+            if aligned_records:
+                document = build_alignment_document(aligned_records, aligned, numberings)
                 write_alignment_document(document, job_directory=job_directory, jobs_root=registry.jobs_root)
-            else:
-                reason = clustalo.error or "Непредвиденная ошибка Clustal Omega."
-                report["errors"].append({"path": "alignment", "reason": reason})
-                _append_log(job_directory, f"Ошибка выравнивания: {reason}")
         else:
             report["skipped"].append({"path": "job", "reason": "Не найдено пригодных последовательностей для выравнивания."})
             counts["files_skipped"] += 1

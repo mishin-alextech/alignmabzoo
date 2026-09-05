@@ -10,7 +10,7 @@ const schemes: Array<{ value: CdrScheme; label: string; color: string }> = [
   { value: 'chothia', label: 'Chothia', color: '#bbdefb' },
 ]
 
-const groupOrder = ['VHeavy', 'VKappa', 'VLambda', 'Other']
+const groupOrder = ['VHeavy', 'VHH', 'VKappa', 'VLambda', 'Other']
 
 function consensus(group: AlignmentGroup): Array<string | null> {
   const length = Math.max(0, ...group.sequences.map((sequence) => sequence.seq.length))
