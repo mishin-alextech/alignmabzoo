@@ -55,6 +55,7 @@ export function JobWizard({ onCreated }: Props) {
   const [selectedGroups, setSelectedGroups] = useState<Record<ProjectKey, string[]>>({})
   const [allGroups, setAllGroups] = useState<Record<ProjectKey, boolean>>({})
   const [applyToAll, setApplyToAll] = useState(false)
+  const [excludeXFile, setExcludeXFile] = useState(false)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string>()
@@ -167,7 +168,8 @@ export function JobWizard({ onCreated }: Props) {
         })
         .filter((project) => project.groups.length > 0),
     })).filter((animal) => animal.projects.length > 0),
-  }), [allGroups, groups, selectedAnimals, selectedGroups, selectedProjects])
+    exclude_x_file: excludeXFile,
+  }), [allGroups, excludeXFile, groups, selectedAnimals, selectedGroups, selectedProjects])
 
   const toggleAnimal = (code: string) => {
     const isRemoving = selectedAnimals.includes(code)
@@ -257,6 +259,10 @@ export function JobWizard({ onCreated }: Props) {
         )}
         {selectedAnimals.length > 0 && <>
           <Divider />
+          <FormControlLabel
+            control={<Checkbox checked={excludeXFile} onChange={(event) => setExcludeXFile(event.target.checked)} />}
+            label="Исключать X_File"
+          />
           <Typography component="h3" variant="h6">2. Проекты</Typography>
           {selectedAnimals.map((code) => (
             <Box key={code}>

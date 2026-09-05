@@ -78,8 +78,8 @@ def _parse_genbank(path: Path) -> Iterable[str]:
 
     try:
         records = list(SeqIO.parse(path, "genbank"))
-    except ValueError as error:
-        if "Did not recognise the LOCUS line layout" not in str(error):
+    except (UnicodeDecodeError, ValueError) as error:
+        if isinstance(error, ValueError) and "Did not recognise the LOCUS line layout" not in str(error):
             raise
         records = list(_parse_genbank_with_normalized_locus(path))
 
@@ -104,7 +104,7 @@ def _parse_genbank_with_normalized_locus(path: Path) -> Iterable[Any]:
     заменяется односоставным вариантом.
     """
 
-    content = path.read_text(encoding="utf-8", errors="replace")
+    content = _read_genbank_text(path)
     lines = content.splitlines(keepends=True)
     for index, line in enumerate(lines):
         if not line.startswith("LOCUS"):
@@ -114,6 +114,24 @@ def _parse_genbank_with_normalized_locus(path: Path) -> Iterable[Any]:
             lines[index] = normalized
             break
     return SeqIO.parse(StringIO("".join(lines)), "genbank")
+
+
+def _read_genbank_text(path: Path) -> str:
+    """Читает текст GenBank без предположения, что служебные поля сохранены в UTF-8.
+
+    Нуклеотидная часть GenBank ASCII-совместима, а не-UTF-8 байты обычно находятся
+    в аннотациях, созданных SnapGene. Сначала сохраняем стандартную UTF-8
+    интерпретацию, затем используем Windows-1251 для русскоязычных аннотаций и
+    Latin-1 как безошибочный последний вариант.
+    """
+
+    data = path.read_bytes()
+    for encoding in ("utf-8", "cp1251", "latin-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
 
 
 def _normalize_locus_line(line: str) -> str | None:

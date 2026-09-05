@@ -98,6 +98,27 @@ async def get_report(job_id: JobId, registry: RegistryDependency) -> JSONRespons
     return _json_artifact(registry, job_id, "report.json")
 
 
+@router.get("/{job_id}/anarci")
+async def list_anarci_csv(job_id: JobId, registry: RegistryDependency) -> dict[str, list[str]]:
+    """Возвращает только готовые CSV раздельных блоков ANARCI."""
+
+    allowed = {
+        f"{scheme}_{batch}.csv"
+        for scheme in ("imgt", "kabat", "chothia")
+        for batch in ("vheavy", "vkappa", "vlambda", "other")
+    }
+    directory = _directory(registry, job_id).resolve()
+    anarci_directory = (directory / "anarci").resolve()
+    if not anarci_directory.is_relative_to(directory) or not anarci_directory.is_dir():
+        return {"files": []}
+    files = sorted(
+        path.name
+        for path in anarci_directory.iterdir()
+        if path.name in allowed and path.is_file() and not path.is_symlink()
+    )
+    return {"files": files}
+
+
 @router.get("/{job_id}/alignments/{filename}")
 async def download_alignment(
     job_id: JobId, filename: str, registry: RegistryDependency

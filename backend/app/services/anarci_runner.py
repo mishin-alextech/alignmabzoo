@@ -67,9 +67,10 @@ class RuntimeCheck:
 
 @dataclass(frozen=True, slots=True)
 class AnarciSchemeResult:
-    """Итог одного запуска ANARCI для схемы нумерации."""
+    """Итог одного запуска ANARCI для схемы и блока цепей."""
 
     scheme: SchemeName
+    batch_name: str
     output_path: Path
     command_result: CommandResult | None
     error: str | None = None
@@ -79,6 +80,14 @@ class AnarciSchemeResult:
         """CSV создан командой без непредвиденной ошибки."""
 
         return self.error is None and self.command_result is not None and self.command_result.succeeded
+
+
+ANARCI_BATCHES: tuple[tuple[str, frozenset[str]], ...] = (
+    ("vheavy", frozenset(("VHeavy", "VHH"))),
+    ("vkappa", frozenset(("VKappa",))),
+    ("vlambda", frozenset(("VLambda",))),
+    ("other", frozenset(("Other",))),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,42 +140,51 @@ def build_anarci_command(
 
 def run_anarci_for_records(
     *,
-    input_fasta: str | Path,
+    records: Sequence[tuple[str, str, str]],
     selected_animals: Sequence[str],
     job_directory: str | Path,
     jobs_root: str | Path,
 ) -> tuple[AnarciSchemeResult, ...]:
-    """Запускает ANARCI ровно один раз для каждой схемы на общем FASTA."""
+    """Запускает ANARCI по отдельности для блоков тяжёлых и лёгких цепей.
+
+    ``chains_named.fasta`` остаётся полным основным артефактом job. Для
+    запуска создаются временные FASTA только соответствующего блока, поэтому
+    итоговые CSV не смешивают тяжёлые, каппа- и лямбда-цепи.
+    """
 
     resolved_job = validate_job_directory(job_directory, jobs_root)
-    input_path = Path(input_fasta).resolve(strict=False)
-    if not input_path.is_file():
-        error = "Не найден общий FASTA-файл переименованных последовательностей."
-        return tuple(
-            AnarciSchemeResult(scheme, job_child_path(resolved_job, "anarci", f"{scheme}.csv"), None, error)
-            for scheme in ANARCI_SCHEMES
-        )
     environment = _check_anarci_environment()
     output_directory = job_child_path(resolved_job, "anarci")
     output_directory.mkdir(parents=True, exist_ok=True)
     if not environment.is_available:
         return tuple(
-            AnarciSchemeResult(scheme, output_directory / f"{scheme}.csv", None, environment.error)
+            AnarciSchemeResult(scheme, batch_name, output_directory / f"{scheme}_{batch_name}.csv", None, environment.error)
+            for batch_name, _groups in ANARCI_BATCHES
             for scheme in ANARCI_SCHEMES
+            if any(group in _groups for _name, _sequence, group in records)
         )
 
     results: list[AnarciSchemeResult] = []
-    for scheme in ANARCI_SCHEMES:
-        output_path = output_directory / f"{scheme}.csv"
-        native_root = output_directory / f".{scheme}_{uuid4().hex}"
-        command = build_anarci_command(input_path, scheme, tuple(selected_animals), native_root)
-        command_result = _run_command(command, cwd=resolved_job)
-        error: str | None = None
-        if command_result.succeeded:
-            error = _merge_native_csv_outputs(native_root, output_path)
-        if error is None:
-            error = _anarci_result_error(command_result, output_path)
-        results.append(AnarciSchemeResult(scheme, output_path, command_result, error))
+    for batch_name, groups in ANARCI_BATCHES:
+        batch_records = tuple(record for record in records if record[2] in groups)
+        if not batch_records:
+            continue
+        input_path = output_directory / f".{batch_name}_{uuid4().hex}.fasta"
+        _write_batch_fasta(input_path, batch_records)
+        try:
+            for scheme in ANARCI_SCHEMES:
+                output_path = output_directory / f"{scheme}_{batch_name}.csv"
+                native_root = output_directory / f".{scheme}_{batch_name}_{uuid4().hex}"
+                command = build_anarci_command(input_path, scheme, tuple(selected_animals), native_root)
+                command_result = _run_command(command, cwd=resolved_job)
+                error: str | None = None
+                if command_result.succeeded:
+                    error = _merge_native_csv_outputs(native_root, output_path)
+                if error is None:
+                    error = _anarci_result_error(command_result, output_path)
+                results.append(AnarciSchemeResult(scheme, batch_name, output_path, command_result, error))
+        finally:
+            input_path.unlink(missing_ok=True)
     return tuple(results)
 
 
@@ -199,6 +217,7 @@ def run_anarci_for_sequence(
             results=tuple(
                 AnarciSchemeResult(
                     scheme=scheme,
+                    batch_name="sequence",
                     output_path=output_directory / f"{safe_name}_{scheme}.csv",
                     command_result=None,
                     error=environment.error,
@@ -216,6 +235,7 @@ def run_anarci_for_sequence(
             results=tuple(
                 AnarciSchemeResult(
                     scheme=scheme,
+                    batch_name="sequence",
                     output_path=output_directory / f"{safe_name}_{scheme}.csv",
                     command_result=None,
                     error=message,
@@ -250,6 +270,7 @@ def run_anarci_for_sequence(
         results.append(
             AnarciSchemeResult(
                 scheme=scheme,
+                batch_name="sequence",
                 output_path=output_path,
                 command_result=command_result,
                 error=error,
@@ -305,6 +326,15 @@ def _validate_sequence(sequence: str) -> str:
     if not cleaned.isascii() or not cleaned.isalpha():
         raise ValueError("Последовательность для ANARCI содержит недопустимые символы")
     return cleaned
+
+
+def _write_batch_fasta(path: Path, records: Sequence[tuple[str, str, str]]) -> None:
+    """Записывает временный FASTA одного блока ANARCI без описаний в ID."""
+
+    lines: list[str] = []
+    for name, sequence, _group in records:
+        lines.extend((f">{name}", sequence))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _run_command(command: Sequence[str], *, cwd: Path) -> CommandResult:

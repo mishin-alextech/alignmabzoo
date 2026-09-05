@@ -12,6 +12,7 @@ export type AnimalSelection = {
 
 export type JobSelection = {
   animals: AnimalSelection[]
+  exclude_x_file?: boolean
 }
 
 export type JobCounts = {

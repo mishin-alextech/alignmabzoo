@@ -102,20 +102,22 @@ def parse_anarci_csv_records(path: str | Path) -> dict[str, ParsedNumbering]:
     id_column = _find_column(headers, "id", "name", "sequence_id")
     if id_column is None:
         parsed = parse_anarci_csv_text(text)
-        return {"": parsed} if parsed.residues else {}
-    result: dict[str, ParsedNumbering] = {}
+        return {"": parsed}
+
+    rows_by_identifier: dict[str, list[dict[str | None, str | None]]] = {}
     for row in rows:
         identifier = (row.get(id_column) or "").strip()
         if not identifier:
             continue
-        row_text = io.StringIO()
-        writer = csv.DictWriter(row_text, fieldnames=headers, lineterminator="\n")
-        writer.writeheader()
-        writer.writerow({header: row.get(header, "") or "" for header in headers})
-        parsed = parse_anarci_csv_text(row_text.getvalue())
-        if parsed.residues:
-            result[identifier] = parsed
-    return result
+        rows_by_identifier.setdefault(identifier, []).append(row)
+
+    # Не отбрасываем строку с известным Id, даже если её позиции не удалось
+    # разобрать. Вызывающий код тогда отличит проблему формата от отсутствия
+    # последовательности в CSV ANARCI.
+    return {
+        identifier: _parse_anarci_rows(headers, identifier_rows)
+        for identifier, identifier_rows in rows_by_identifier.items()
+    }
 
 
 def parse_anarci_csv_text(text: str) -> ParsedNumbering:
@@ -132,6 +134,14 @@ def parse_anarci_csv_text(text: str) -> ParsedNumbering:
         return ParsedNumbering((), warning="CSV ANARCI не содержит заголовка")
     if not rows:
         return ParsedNumbering((), warning="CSV ANARCI не содержит строк нумерации")
+
+    return _parse_anarci_rows(headers, rows)
+
+
+def _parse_anarci_rows(
+    headers: Sequence[str], rows: Sequence[dict[str | None, str | None]]
+) -> ParsedNumbering:
+    """Разбирает строки одной последовательности из общего CSV ANARCI."""
 
     chain_column = _find_column(headers, "chain_type", "chain", "chain type")
     chain_type = _first_nonempty(rows, chain_column) if chain_column else None
@@ -164,10 +174,17 @@ def parse_anarci_csv_text(text: str) -> ParsedNumbering:
     if residues:
         return ParsedNumbering(tuple(residues), chain_type=chain_type)
 
+    has_numbered_headers = any(parse_numbering_label(header) is not None for header in headers)
+    if position_column and residue_column:
+        warning = "В строке последовательности CSV ANARCI есть колонки нумерации, но нет распознаваемых аминокислот."
+    elif has_numbered_headers:
+        warning = "В строке последовательности CSV ANARCI есть заголовки позиций, но нет распознаваемых аминокислот."
+    else:
+        warning = "В строке последовательности CSV ANARCI не найдены позиции нумерации аминокислот."
     return ParsedNumbering(
         (),
         chain_type=chain_type,
-        warning="В CSV ANARCI не найдены колонки нумерации аминокислот",
+        warning=warning,
     )
 
 

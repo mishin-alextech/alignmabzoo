@@ -121,6 +121,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         selected = validate_selection(record.selection.root, discovery)
         selected_animals = tuple(dict.fromkeys(item.animal_code for item in selected))
         include_animal_code = len(selected_animals) > 1
+        exclude_x_file = record.selection.root.get("exclude_x_file") is True
         source_files = list(_discover_files(selected))
         counts["files_found"] = len(source_files)
         _append_log(job_directory, f"Найдено входных файлов: {len(source_files)}.")
@@ -128,8 +129,14 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         parsed_paths: dict[str, str] = {}
         used_names: set[str] = set()
         for selected_group, source_path in source_files:
-            result = parse_sequence_file(source_path)
             relative = _report_path(selected_group, source_path)
+            if exclude_x_file and "_X_File" in source_path.name:
+                reason = "Файл пропущен по настройке «Исключать X_File»."
+                report["skipped"].append({"path": relative, "reason": reason})
+                counts["files_skipped"] += 1
+                _append_log(job_directory, f"Пропущен файл {relative}: {reason}")
+                continue
+            result = parse_sequence_file(source_path)
             if not result.is_success or result.sequence is None:
                 reason = result.error or "Не удалось извлечь белковую последовательность."
                 report["errors"].append({"path": relative, "reason": reason})
@@ -169,7 +176,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
         if parsed_records:
             anarci_results = run_anarci_for_records(
-                input_fasta=job_child_path(job_directory, "chains_named.fasta"),
+                records=tuple((item.name, item.sequence, item.group) for item in parsed_records),
                 selected_animals=selected_animals,
                 job_directory=job_directory,
                 jobs_root=registry.jobs_root,
@@ -178,18 +185,22 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _log_command(job_directory, scheme_result.command_result)
                 if scheme_result.succeeded:
                     parsed_by_name = parse_anarci_csv_records(scheme_result.output_path)
-                    for item in parsed_records:
+                    for item in (item for item in parsed_records if _anarci_batch_name(item.group) == scheme_result.batch_name):
                         parsed = parsed_by_name.get(item.name)
-                        if parsed is not None:
+                        if parsed is not None and parsed.residues:
                             numberings[item.name][scheme_result.scheme] = parsed
+                        elif parsed is not None:
+                            reason = parsed.warning or "Строка последовательности CSV ANARCI не содержит распознаваемых позиций нумерации."
+                            report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
+                            _append_log(job_directory, f"Ошибка ANARCI для {item.name}: {reason}")
                         else:
-                            reason = "В общем CSV ANARCI отсутствует нумерация последовательности."
+                            reason = f"В CSV ANARCI блока {scheme_result.batch_name} отсутствует строка последовательности."
                             report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
                             _append_log(job_directory, f"Ошибка ANARCI для {item.name}: {reason}")
                 else:
                     reason = scheme_result.error or "Непредвиденная ошибка ANARCI."
-                    report["errors"].append({"path": "ANARCI", "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
-                    _append_log(job_directory, f"Ошибка ANARCI для схемы {scheme_result.scheme}: {reason}")
+                    report["errors"].append({"path": f"ANARCI/{scheme_result.batch_name}", "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
+                    _append_log(job_directory, f"Ошибка ANARCI для блока {scheme_result.batch_name}, схемы {scheme_result.scheme}: {reason}")
         if parsed_records:
             aligned_records: list[AlignmentInput] = []
             aligned: dict[str, str] = {}
@@ -270,6 +281,18 @@ def _normalize_protein_sequence(sequence: str) -> str | None:
     if not normalized or not normalized.isascii() or not normalized.isalpha():
         return None
     return normalized
+
+
+def _anarci_batch_name(group: str) -> str:
+    """Возвращает имя блока ANARCI для группы цепи."""
+
+    if group in {"VHeavy", "VHH"}:
+        return "vheavy"
+    if group == "VKappa":
+        return "vkappa"
+    if group == "VLambda":
+        return "vlambda"
+    return "other"
 
 
 def _write_parsed_fasta(directory: Path, records: list[AlignmentInput], paths: Mapping[str, str]) -> None:

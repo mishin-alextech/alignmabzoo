@@ -22,8 +22,11 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "VK1": "VKappa",
     "V1K": "VKappa",
     "K1C": "VKappa",
+    "K2": "VKappa",
+    "K2C": "VKappa",
     "KC": "VKappa",
     "KC1": "VKappa",
+    "CK": "VKappa",
     "kappa1": "VKappa",
     "Kappa": "VKappa",
     "Kappa1": "VKappa",
@@ -32,6 +35,7 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "LC": "VLambda",
     "LC1": "VLambda",
     "LC2": "VLambda",
+    "LmbdC": "VLambda",
     "VLambda": "VLambda",
 }
 _CHAIN_ALIAS_RE: Final[re.Pattern[str]] = re.compile(
