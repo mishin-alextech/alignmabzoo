@@ -3,7 +3,7 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from app.services.discovery import Animal, DiscoveryService, get_discovery_service
@@ -33,6 +33,7 @@ class ProjectsResponse(BaseModel):
 
     animal_code: str
     projects: list[NameItem]
+    next_offset: int | None
 
 
 class GroupsResponse(BaseModel):
@@ -41,9 +42,12 @@ class GroupsResponse(BaseModel):
     animal_code: str
     project: str
     groups: list[NameItem]
+    next_offset: int | None
 
 
 ServiceDependency = Annotated[DiscoveryService, Depends(get_discovery_service)]
+PageOffset = Annotated[int, Query(ge=0)]
+PageLimit = Annotated[int, Query(ge=1, le=50)]
 AnimalCode = Annotated[str, Path(min_length=2, max_length=2, description="Код животного")]
 ProjectName = Annotated[str, Path(min_length=1, max_length=200, description="Имя проекта")]
 
@@ -52,6 +56,12 @@ router = APIRouter(tags=["Обзор исходных данных"])
 
 def _not_found(detail: str) -> HTTPException:
     return HTTPException(status_code=404, detail=detail)
+
+
+def _page_names(names: list[str], offset: int, limit: int) -> tuple[list[str], int | None]:
+    page = names[offset : offset + limit]
+    next_offset = offset + len(page)
+    return page, next_offset if next_offset < len(names) else None
 
 
 def _ensure_animal(service: DiscoveryService, animal_code: str) -> None:
@@ -87,15 +97,20 @@ async def get_animals(service: ServiceDependency) -> AnimalsResponse:
     summary="Список проектов животного",
 )
 async def get_projects(
-    animal_code: AnimalCode, service: ServiceDependency
+    animal_code: AnimalCode,
+    service: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
 ) -> ProjectsResponse:
     """Возвращает проекты первого уровня или пустой список при пустом data-root."""
 
     _ensure_animal(service, animal_code)
     projects = await asyncio.to_thread(service.list_projects, animal_code)
+    page, next_offset = _page_names(projects, offset, limit)
     return ProjectsResponse(
         animal_code=animal_code,
-        projects=[NameItem(name=name) for name in projects],
+        projects=[NameItem(name=name) for name in page],
+        next_offset=next_offset,
     )
 
 
@@ -105,7 +120,11 @@ async def get_projects(
     summary="Список групп проекта",
 )
 async def get_groups(
-    animal_code: AnimalCode, project: ProjectName, service: ServiceDependency
+    animal_code: AnimalCode,
+    project: ProjectName,
+    service: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
 ) -> GroupsResponse:
     """Возвращает группы первого уровня существующего проекта."""
 
@@ -115,10 +134,12 @@ async def get_groups(
         groups = await asyncio.to_thread(service.list_groups, animal_code, project)
     except ValueError as error:
         raise _not_found(str(error)) from error
+    page, next_offset = _page_names(groups, offset, limit)
     return GroupsResponse(
         animal_code=animal_code,
         project=project,
-        groups=[NameItem(name=name) for name in groups],
+        groups=[NameItem(name=name) for name in page],
+        next_offset=next_offset,
     )
 
 
@@ -128,8 +149,12 @@ async def get_groups(
     include_in_schema=False,
 )
 async def get_groups_compatibility(
-    animal_code: AnimalCode, project: ProjectName, service: ServiceDependency
+    animal_code: AnimalCode,
+    project: ProjectName,
+    service: ServiceDependency,
+    offset: PageOffset = 0,
+    limit: PageLimit = 50,
 ) -> GroupsResponse:
     """Поддерживает ранний вариант маршрута получения групп."""
 
-    return await get_groups(animal_code, project, service)
+    return await get_groups(animal_code, project, service, offset, limit)

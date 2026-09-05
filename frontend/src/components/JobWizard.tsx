@@ -45,15 +45,6 @@ function VirtualizedList({ items, renderItem }: { items: string[]; renderItem: (
   )
 }
 
-async function sequentialMap<T, R>(items: T[], callback: (item: T) => Promise<R>, signal: AbortSignal): Promise<R[]> {
-  const result: R[] = []
-  for (const item of items) {
-    if (signal.aborted) throw new DOMException('Запрос отменён', 'AbortError')
-    result.push(await callback(item))
-  }
-  return result
-}
-
 export function JobWizard({ onCreated }: Props) {
   const [name, setName] = useState('')
   const [animals, setAnimals] = useState<Animal[]>([])
@@ -108,20 +99,26 @@ export function JobWizard({ onCreated }: Props) {
     if (absent.length > 0) {
       appendLog(`Загружаю проекты для: ${absent.join(', ')}…`)
     }
-    void sequentialMap(absent, async (code) => [code, await api.projects(code, controller.signal)] as const, controller.signal).then(
-      (items) => {
-        if (!active) return
-        setProjects((current) => ({ ...current, ...Object.fromEntries(items) }))
-        for (const [code, list] of items) {
-          appendLog(list.length > 0 ? `Проекты ${code}: ${list.length} шт. (${list.join(', ')})` : `Проекты ${code}: не найдены.`)
+    void (async () => {
+      try {
+        for (const code of absent) {
+          const list: string[] = []
+          let offset = 0
+          while (active) {
+            const page = await api.projects(code, offset, controller.signal)
+            list.push(...page.items)
+            appendLog(`Проекты ${code}: загружено ${list.length}.`)
+            if (page.nextOffset === null) break
+            offset = page.nextOffset
+          }
+          if (active) setProjects((current) => ({ ...current, [code]: list }))
         }
-      },
-      (reason) => {
-        if (!active) return
+      } catch (reason) {
+        if (!active || (reason instanceof DOMException && reason.name === 'AbortError')) return
         appendLog(`Ошибка загрузки проектов: ${reason instanceof ApiError ? reason.message : 'не удалось загрузить проекты.'}`)
         setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить проекты.')
-      },
-    )
+      }
+    })()
     return () => { active = false; controller.abort() }
   }, [selectedAnimals, projects, appendLog])
 
@@ -132,24 +129,27 @@ export function JobWizard({ onCreated }: Props) {
     if (missing.length > 0) {
       appendLog(`Загружаю группы для: ${missing.map((key) => key.split('\u0000').join(' / ')).join(', ')}…`)
     }
-    void sequentialMap(missing, async (projectKey) => {
-      const [animalCode, project] = projectKey.split('\u0000')
-      return [projectKey, await api.groups(animalCode, project, controller.signal)] as const
-    }, controller.signal).then(
-      (items) => {
-        if (!active) return
-        setGroups((current) => ({ ...current, ...Object.fromEntries(items) }))
-        for (const [projectKey, list] of items) {
-          const label = projectKey.split('\u0000').join(' / ')
-          appendLog(list.length > 0 ? `Группы ${label}: ${list.length} шт. (${list.join(', ')})` : `Группы ${label}: не найдены.`)
+    void (async () => {
+      try {
+        for (const projectKey of missing) {
+          const [animalCode, project] = projectKey.split('\u0000')
+          const list: string[] = []
+          let offset = 0
+          while (active) {
+            const page = await api.groups(animalCode, project, offset, controller.signal)
+            list.push(...page.items)
+            appendLog(`Группы ${animalCode} / ${project}: загружено ${list.length}.`)
+            if (page.nextOffset === null) break
+            offset = page.nextOffset
+          }
+          if (active) setGroups((current) => ({ ...current, [projectKey]: list }))
         }
-      },
-      (reason) => {
-        if (!active) return
+      } catch (reason) {
+        if (!active || (reason instanceof DOMException && reason.name === 'AbortError')) return
         appendLog(`Ошибка загрузки групп: ${reason instanceof ApiError ? reason.message : 'не удалось загрузить группы.'}`)
         setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить группы.')
-      },
-    )
+      }
+    })()
     return () => { active = false; controller.abort() }
   }, [selectedProjects, groups, appendLog])
 

@@ -56,6 +56,7 @@ export type AlignmentGroup = {
 }
 
 export type AlignmentResponse = { groups?: AlignmentGroup[] }
+export type BrowsePage = { items: string[]; nextOffset: number | null }
 
 export type ReportEntry = { path?: string; reason?: string }
 
@@ -128,20 +129,26 @@ export const api = {
     return response.animals ?? []
   },
 
-  async projects(animalCode: string, signal?: AbortSignal): Promise<string[]> {
-    const response = await request<{ projects?: Array<{ name?: string }> }>(
-      `/animals/${encodeURIComponent(animalCode)}/projects`,
+  async projects(animalCode: string, offset = 0, signal?: AbortSignal): Promise<BrowsePage> {
+    const response = await request<{ projects?: Array<{ name?: string }>; next_offset?: number | null }>(
+      `/animals/${encodeURIComponent(animalCode)}/projects?offset=${offset}&limit=50`,
       { signal },
     )
-    return (response.projects ?? []).flatMap((item) => (item.name ? [item.name] : []))
+    return {
+      items: (response.projects ?? []).flatMap((item) => (item.name ? [item.name] : [])),
+      nextOffset: response.next_offset ?? null,
+    }
   },
 
-  async groups(animalCode: string, project: string, signal?: AbortSignal): Promise<string[]> {
-    const response = await request<{ groups?: Array<{ name?: string }> }>(
-      `/animals/${encodeURIComponent(animalCode)}/projects/${encodeURIComponent(project)}/groups`,
+  async groups(animalCode: string, project: string, offset = 0, signal?: AbortSignal): Promise<BrowsePage> {
+    const response = await request<{ groups?: Array<{ name?: string }>; next_offset?: number | null }>(
+      `/animals/${encodeURIComponent(animalCode)}/projects/${encodeURIComponent(project)}/groups?offset=${offset}&limit=50`,
       { signal },
     )
-    return (response.groups ?? []).flatMap((item) => (item.name ? [item.name] : []))
+    return {
+      items: (response.groups ?? []).flatMap((item) => (item.name ? [item.name] : [])),
+      nextOffset: response.next_offset ?? null,
+    }
   },
 
   async createJob(name: string, selection: JobSelection): Promise<Job> {
