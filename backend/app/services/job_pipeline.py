@@ -20,9 +20,9 @@ from app.services.alignment import (
 from app.services.anarci_runner import (
     check_runtime_environment,
     job_child_path,
-    run_anarci_for_sequence,
+    run_anarci_for_records,
 )
-from app.services.cdr_extract import parse_anarci_csv
+from app.services.cdr_extract import parse_anarci_csv_records
 from app.services.discovery import DiscoveryService, get_discovery_service
 from app.services.job_registry import JobCounts, JobRecord, JobRegistry, JobStatus
 from app.services.naming import name_chain
@@ -144,19 +144,31 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         _write_parsed_fasta(job_directory, parsed_records, parsed_paths)
         _write_named_fasta(job_directory, parsed_records)
         counts["sequences"] = len(parsed_records)
-        numberings: dict[str, dict[str, object]] = {}
-        for item in parsed_records:
-            anarci = run_anarci_for_sequence(sequence_name=item.name, sequence=item.sequence, animal_code=item.animal_code, job_directory=job_directory, jobs_root=registry.jobs_root)
-            per_scheme: dict[str, object] = {}
-            for scheme_result in anarci.results:
+        numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
+        selected_animals = tuple(dict.fromkeys(item.animal_code for item in selected))
+        if parsed_records:
+            anarci_results = run_anarci_for_records(
+                input_fasta=job_child_path(job_directory, "chains_named.fasta"),
+                selected_animals=selected_animals,
+                job_directory=job_directory,
+                jobs_root=registry.jobs_root,
+            )
+            for scheme_result in anarci_results:
                 _log_command(job_directory, scheme_result.command_result)
                 if scheme_result.succeeded:
-                    per_scheme[scheme_result.scheme] = parse_anarci_csv(scheme_result.output_path)
+                    parsed_by_name = parse_anarci_csv_records(scheme_result.output_path)
+                    for item in parsed_records:
+                        parsed = parsed_by_name.get(item.name)
+                        if parsed is not None:
+                            numberings[item.name][scheme_result.scheme] = parsed
+                        else:
+                            reason = "В общем CSV ANARCI отсутствует нумерация последовательности."
+                            report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
+                            _append_log(job_directory, f"Ошибка ANARCI для {item.name}: {reason}")
                 else:
                     reason = scheme_result.error or "Непредвиденная ошибка ANARCI."
-                    report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
-                    _append_log(job_directory, f"Ошибка ANARCI для {item.name}: {reason}")
-            numberings[item.name] = per_scheme
+                    report["errors"].append({"path": "ANARCI", "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
+                    _append_log(job_directory, f"Ошибка ANARCI для схемы {scheme_result.scheme}: {reason}")
         if parsed_records:
             clustalo = run_clustalo(parsed_records, job_directory=job_directory, jobs_root=registry.jobs_root)
             _log_command(job_directory, clustalo.command_result)

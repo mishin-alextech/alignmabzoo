@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import re
 import shutil
 import subprocess
@@ -103,29 +104,70 @@ def check_runtime_environment() -> RuntimeCheck:
 
 
 def build_anarci_command(
-    sequence: str,
+    input_fasta: str | Path,
     scheme: SchemeName,
-    animal_code: str,
+    selected_animals: Sequence[str],
     output_path: str | Path,
 ) -> tuple[str, ...]:
-    """Строит точную команду ANARCI для одного нативного CSV."""
+    """Строит команду ANARCI для общего FASTA всех последовательностей job."""
 
     if scheme not in ANARCI_SCHEMES:
         raise ValueError(f"Неизвестная схема ANARCI: {scheme}")
     command: list[str] = [
         "ANARCI",
         "-i",
-        _validate_sequence(sequence),
+        str(input_fasta),
         "--scheme",
         scheme,
         "--csv",
         "--outfile",
         str(output_path),
     ]
-    species = ANARCI_SPECIES.get(animal_code)
+    species = ANARCI_SPECIES.get(selected_animals[0]) if len(selected_animals) == 1 else None
     if species is not None:
         command.extend(("--use_species", species))
     return tuple(command)
+
+
+def run_anarci_for_records(
+    *,
+    input_fasta: str | Path,
+    selected_animals: Sequence[str],
+    job_directory: str | Path,
+    jobs_root: str | Path,
+) -> tuple[AnarciSchemeResult, ...]:
+    """Запускает ANARCI ровно один раз для каждой схемы на общем FASTA."""
+
+    resolved_job = validate_job_directory(job_directory, jobs_root)
+    input_path = Path(input_fasta).resolve(strict=False)
+    if not input_path.is_file():
+        error = "Не найден общий FASTA-файл переименованных последовательностей."
+        return tuple(
+            AnarciSchemeResult(scheme, job_child_path(resolved_job, "anarci", f"{scheme}.csv"), None, error)
+            for scheme in ANARCI_SCHEMES
+        )
+    environment = _check_anarci_environment()
+    output_directory = job_child_path(resolved_job, "anarci")
+    output_directory.mkdir(parents=True, exist_ok=True)
+    if not environment.is_available:
+        return tuple(
+            AnarciSchemeResult(scheme, output_directory / f"{scheme}.csv", None, environment.error)
+            for scheme in ANARCI_SCHEMES
+        )
+
+    results: list[AnarciSchemeResult] = []
+    for scheme in ANARCI_SCHEMES:
+        output_path = output_directory / f"{scheme}.csv"
+        native_root = output_directory / f".{scheme}_{uuid4().hex}"
+        command = build_anarci_command(input_path, scheme, tuple(selected_animals), native_root)
+        command_result = _run_command(command, cwd=resolved_job)
+        error: str | None = None
+        if command_result.succeeded:
+            error = _merge_native_csv_outputs(native_root, output_path)
+        if error is None:
+            error = _anarci_result_error(command_result, output_path)
+        results.append(AnarciSchemeResult(scheme, output_path, command_result, error))
+    return tuple(results)
 
 
 def run_anarci_for_sequence(
@@ -308,6 +350,42 @@ def _normalise_csv_output(output_path: Path) -> None:
     appended_suffix = output_path.with_name(output_path.name + ".csv")
     if appended_suffix.is_file():
         appended_suffix.replace(output_path)
+
+
+def _merge_native_csv_outputs(native_root: Path, output_path: Path) -> str | None:
+    """Объединяет нативные H/KL CSV одного общего запуска в CSV схемы."""
+
+    candidates = tuple(
+        path for path in native_root.parent.iterdir()
+        if path.is_file() and path.name.startswith(native_root.name + "_") and path.suffix == ".csv"
+    )
+    if not candidates:
+        return "ANARCI завершился без создания нативного CSV"
+    try:
+        tables = []
+        headers: list[str] = []
+        for path in candidates:
+            with path.open(encoding="utf-8", newline="") as source:
+                reader = csv.DictReader(source)
+                table_headers = list(reader.fieldnames or [])
+                if not table_headers:
+                    continue
+                headers.extend(header for header in table_headers if header not in headers)
+                tables.append((table_headers, list(reader)))
+        if not headers:
+            return "ANARCI создал пустой CSV"
+        with output_path.open("w", encoding="utf-8", newline="") as target:
+            writer = csv.DictWriter(target, fieldnames=headers, lineterminator="\n")
+            writer.writeheader()
+            for _, rows in tables:
+                for row in rows:
+                    writer.writerow({header: row.get(header, "") or "" for header in headers})
+        for path in candidates:
+            path.unlink(missing_ok=True)
+        shutil.rmtree(native_root, ignore_errors=True)
+    except (OSError, csv.Error) as error:
+        return f"Не удалось сохранить CSV ANARCI: {error}"
+    return None
 
 
 def _move_native_csv_output(

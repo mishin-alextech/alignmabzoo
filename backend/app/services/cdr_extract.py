@@ -89,6 +89,35 @@ def parse_anarci_csv(path: str | Path) -> ParsedNumbering:
     return parse_anarci_csv_text(text)
 
 
+def parse_anarci_csv_records(path: str | Path) -> dict[str, ParsedNumbering]:
+    """Читает общий CSV ANARCI и возвращает нумерацию отдельно по колонке ``Id``."""
+
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        headers = tuple(reader.fieldnames or ())
+        rows = tuple(reader)
+    except (OSError, csv.Error):
+        return {}
+    id_column = _find_column(headers, "id", "name", "sequence_id")
+    if id_column is None:
+        parsed = parse_anarci_csv_text(text)
+        return {"": parsed} if parsed.residues else {}
+    result: dict[str, ParsedNumbering] = {}
+    for row in rows:
+        identifier = (row.get(id_column) or "").strip()
+        if not identifier:
+            continue
+        row_text = io.StringIO()
+        writer = csv.DictWriter(row_text, fieldnames=headers, lineterminator="\n")
+        writer.writeheader()
+        writer.writerow({header: row.get(header, "") or "" for header in headers})
+        parsed = parse_anarci_csv_text(row_text.getvalue())
+        if parsed.residues:
+            result[identifier] = parsed
+    return result
+
+
 def parse_anarci_csv_text(text: str) -> ParsedNumbering:
     """Разбирает содержимое CSV ANARCI в порядке остатков домена."""
 
