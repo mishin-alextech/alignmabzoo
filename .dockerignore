@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+bioinfo3 information/
+frontend/node_modules/
+frontend/dist/
+jobs/
+
+*.log
+.env

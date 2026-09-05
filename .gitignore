@@ -1,0 +1,15 @@
+# Материалы существующего портала не входят в самостоятельный сервис.
+bioinfo3 information/
+bioinfo3/
+
+# Локальные и генерируемые артефакты.
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+frontend/node_modules/
+frontend/dist/
+jobs/
+*.log
+.env

@@ -1,0 +1,2 @@
+"""Маршруты HTTP API AlignMabZoo."""
+

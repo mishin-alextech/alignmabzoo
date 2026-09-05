@@ -1,0 +1,2 @@
+"""Пакет backend-приложения AlignMabZoo."""
+
