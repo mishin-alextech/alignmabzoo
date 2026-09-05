@@ -84,7 +84,7 @@ def validate_selection(selection: Mapping[str, Any], discovery: DiscoveryService
                 key = (code, project_name, group_name)
                 if key not in seen:
                     seen.add(key)
-                    selected.append(SelectedGroup(code, project_name, group_name, data_root / code / project_name / group_name))
+                    selected.append(SelectedGroup(code, project_name, group_name, data_root / discovery.animal_directory_name(code) / project_name / group_name))
     return tuple(selected)
 
 

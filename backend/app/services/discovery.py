@@ -11,6 +11,20 @@ from typing import Final
 from app.config import get_settings
 
 
+ANIMAL_DIRECTORIES: Final[dict[str, str]] = {
+    "Ms": "1-2_Mouse mAbs_seq results",
+    "Rb": "3_Rabbit mAbs_seq results",
+    "Rt": "4-5_Rat mAbs_seq results",
+    "Pg": "6_Pig_mAbs_seq_results",
+    "Hu": "7_Human_mAbs_seq_results",
+    "Hs": "80_83_Hamster_mAbs_seq_results",
+    "Ov": "90_Ovis_Aries_mAbs_seq_results",
+    "Gt": "92_Goat_mAbs_seq_results",
+    "Cm": "94_95_Camelids_mAbs_seq_results",
+    "Bv": "96_97_Bovine_mAbs_seq_results",
+}
+
+
 ANIMAL_NAMES: Final[dict[str, str]] = {
     "Ms": "Мышь",
     "Rb": "Кролик",
@@ -61,11 +75,17 @@ class DiscoveryService:
 
         return animal_code in ANIMAL_NAMES
 
+    def animal_directory_name(self, animal_code: str) -> str:
+        """Возвращает имя каталога животного в data-root для кода."""
+
+        self._require_animal(animal_code)
+        return ANIMAL_DIRECTORIES[animal_code]
+
     def list_projects(self, animal_code: str) -> tuple[str, ...]:
         """Возвращает проекты первого уровня для животного."""
 
         self._require_animal(animal_code)
-        directory = self._child_directory(self._data_root, animal_code)
+        directory = self._child_directory(self._data_root, self.animal_directory_name(animal_code))
         return self._cached_directory_names(("projects", animal_code), directory)
 
     def has_project(self, animal_code: str, project: str) -> bool:
@@ -78,7 +98,7 @@ class DiscoveryService:
 
         self._require_animal(animal_code)
         self._validate_component(project)
-        animal_directory = self._child_directory(self._data_root, animal_code)
+        animal_directory = self._child_directory(self._data_root, self.animal_directory_name(animal_code))
         project_directory = self._child_directory(animal_directory, project)
         return self._cached_directory_names(
             ("groups", animal_code, project), project_directory
