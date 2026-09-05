@@ -1,5 +1,6 @@
 """HTTP-маршруты безопасного обзора каталога исходных данных."""
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -58,11 +59,11 @@ def _ensure_animal(service: DiscoveryService, animal_code: str) -> None:
         raise _not_found(f"Код животного «{animal_code}» не поддерживается.")
 
 
-def _ensure_project(
+async def _ensure_project(
     service: DiscoveryService, animal_code: str, project: str
 ) -> None:
     try:
-        project_exists = service.has_project(animal_code, project)
+        project_exists = await asyncio.to_thread(service.has_project, animal_code, project)
     except ValueError as error:
         raise _not_found(str(error)) from error
     if not project_exists:
@@ -91,9 +92,10 @@ async def get_projects(
     """Возвращает проекты первого уровня или пустой список при пустом data-root."""
 
     _ensure_animal(service, animal_code)
+    projects = await asyncio.to_thread(service.list_projects, animal_code)
     return ProjectsResponse(
         animal_code=animal_code,
-        projects=[NameItem(name=name) for name in service.list_projects(animal_code)],
+        projects=[NameItem(name=name) for name in projects],
     )
 
 
@@ -108,9 +110,9 @@ async def get_groups(
     """Возвращает группы первого уровня существующего проекта."""
 
     _ensure_animal(service, animal_code)
-    _ensure_project(service, animal_code, project)
+    await _ensure_project(service, animal_code, project)
     try:
-        groups = service.list_groups(animal_code, project)
+        groups = await asyncio.to_thread(service.list_groups, animal_code, project)
     except ValueError as error:
         raise _not_found(str(error)) from error
     return GroupsResponse(

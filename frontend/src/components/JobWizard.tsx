@@ -19,6 +19,15 @@ type ProjectKey = `${string}\u0000${string}`
 
 const keyFor = (animalCode: string, project: string): ProjectKey => `${animalCode}\u0000${project}`
 
+async function sequentialMap<T, R>(items: T[], callback: (item: T) => Promise<R>, signal: AbortSignal): Promise<R[]> {
+  const result: R[] = []
+  for (const item of items) {
+    if (signal.aborted) throw new DOMException('Запрос отменён', 'AbortError')
+    result.push(await callback(item))
+  }
+  return result
+}
+
 export function JobWizard({ onCreated }: Props) {
   const [name, setName] = useState('')
   const [animals, setAnimals] = useState<Animal[]>([])
@@ -68,11 +77,12 @@ export function JobWizard({ onCreated }: Props) {
 
   useEffect(() => {
     let active = true
+    const controller = new AbortController()
     const absent = selectedAnimals.filter((code) => projects[code] === undefined)
     if (absent.length > 0) {
       appendLog(`Загружаю проекты для: ${absent.join(', ')}…`)
     }
-    void Promise.all(absent.map(async (code) => [code, await api.projects(code)] as const)).then(
+    void sequentialMap(absent, async (code) => [code, await api.projects(code, controller.signal)] as const, controller.signal).then(
       (items) => {
         if (!active) return
         setProjects((current) => ({ ...current, ...Object.fromEntries(items) }))
@@ -86,19 +96,20 @@ export function JobWizard({ onCreated }: Props) {
         setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить проекты.')
       },
     )
-    return () => { active = false }
+    return () => { active = false; controller.abort() }
   }, [selectedAnimals, projects, appendLog])
 
   useEffect(() => {
     let active = true
+    const controller = new AbortController()
     const missing = selectedProjects.filter((projectKey) => groups[projectKey] === undefined)
     if (missing.length > 0) {
       appendLog(`Загружаю группы для: ${missing.map((key) => key.split('\u0000').join(' / ')).join(', ')}…`)
     }
-    void Promise.all(missing.map(async (projectKey) => {
+    void sequentialMap(missing, async (projectKey) => {
       const [animalCode, project] = projectKey.split('\u0000')
-      return [projectKey, await api.groups(animalCode, project)] as const
-    })).then(
+      return [projectKey, await api.groups(animalCode, project, controller.signal)] as const
+    }, controller.signal).then(
       (items) => {
         if (!active) return
         setGroups((current) => ({ ...current, ...Object.fromEntries(items) }))
@@ -113,7 +124,7 @@ export function JobWizard({ onCreated }: Props) {
         setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить группы.')
       },
     )
-    return () => { active = false }
+    return () => { active = false; controller.abort() }
   }, [selectedProjects, groups, appendLog])
 
   const selection = useMemo<JobSelection>(() => ({

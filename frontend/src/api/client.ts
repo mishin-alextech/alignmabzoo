@@ -87,6 +87,9 @@ const REQUEST_TIMEOUT_MS = 30_000
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController()
+  const externalSignal = init?.signal
+  const abortExternal = () => controller.abort()
+  externalSignal?.addEventListener('abort', abortExternal, { once: true })
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let response: Response
   try {
@@ -97,11 +100,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
+      if (externalSignal?.aborted) throw error
       throw new ApiError('Превышено время ожидания запроса (30 с).')
     }
     throw new ApiError('Не удалось связаться с сервером.')
   } finally {
     clearTimeout(timeout)
+    externalSignal?.removeEventListener('abort', abortExternal)
   }
 
   if (!response.ok) {
@@ -123,16 +128,18 @@ export const api = {
     return response.animals ?? []
   },
 
-  async projects(animalCode: string): Promise<string[]> {
+  async projects(animalCode: string, signal?: AbortSignal): Promise<string[]> {
     const response = await request<{ projects?: Array<{ name?: string }> }>(
       `/animals/${encodeURIComponent(animalCode)}/projects`,
+      { signal },
     )
     return (response.projects ?? []).flatMap((item) => (item.name ? [item.name] : []))
   },
 
-  async groups(animalCode: string, project: string): Promise<string[]> {
+  async groups(animalCode: string, project: string, signal?: AbortSignal): Promise<string[]> {
     const response = await request<{ groups?: Array<{ name?: string }> }>(
       `/animals/${encodeURIComponent(animalCode)}/projects/${encodeURIComponent(project)}/groups`,
+      { signal },
     )
     return (response.groups ?? []).flatMap((item) => (item.name ? [item.name] : []))
   },
