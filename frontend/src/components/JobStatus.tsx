@@ -1,4 +1,4 @@
-import { Alert, Box, Chip, CircularProgress, Divider, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, Chip, CircularProgress, Collapse, Divider, Paper, Stack, Typography } from '@mui/material'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, type Job } from '../api/client'
 
@@ -10,6 +10,7 @@ export function JobStatus({ job: initialJob, onUpdate }: Props) {
   const [job, setJob] = useState(initialJob)
   const [log, setLog] = useState('')
   const [error, setError] = useState<string>()
+  const [isLogExpanded, setIsLogExpanded] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
@@ -35,13 +36,12 @@ export function JobStatus({ job: initialJob, onUpdate }: Props) {
     return () => { active = false; window.clearInterval(timer) }
   }, [initialJob.id, initialJob.status, onUpdate])
 
-  // Автопрокрутка лога вниз при обновлении, если пользователь не прокрутил вверх.
   useEffect(() => {
     const element = logRef.current
-    if (element && stickToBottomRef.current) {
+    if (isLogExpanded && element && stickToBottomRef.current) {
       element.scrollTop = element.scrollHeight
     }
-  }, [log])
+  }, [isLogExpanded, log])
 
   const handleLogScroll = () => {
     const element = logRef.current
@@ -74,15 +74,24 @@ export function JobStatus({ job: initialJob, onUpdate }: Props) {
           Найдено файлов: {job.counts?.files_found ?? 0}; последовательностей: {job.counts?.sequences ?? 0}.
         </Typography>
         <Divider />
-        <Typography component="h3" variant="subtitle1">Журнал выполнения</Typography>
-        <Box
-          ref={logRef}
-          onScroll={handleLogScroll}
-          component="pre"
-          sx={{ m: 0, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, bgcolor: 'grey.50', border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}
+        <Button
+          aria-expanded={isLogExpanded}
+          onClick={() => setIsLogExpanded((current) => !current)}
+          sx={{ justifyContent: 'space-between', px: 0, color: 'text.primary', textTransform: 'none' }}
         >
-          {log || 'Журнал пока пуст.'}
-        </Box>
+          <Typography component="h3" variant="subtitle1">Журнал выполнения</Typography>
+          <Box component="span" aria-hidden="true">{isLogExpanded ? '▴' : '▾'}</Box>
+        </Button>
+        <Collapse in={isLogExpanded}>
+          <Box
+            ref={logRef}
+            onScroll={handleLogScroll}
+            component="pre"
+            sx={{ m: 0, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, bgcolor: 'grey.50', border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}
+          >
+            {log || 'Журнал пока пуст.'}
+          </Box>
+        </Collapse>
       </Stack>
     </Paper>
   )

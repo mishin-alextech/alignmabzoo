@@ -5,6 +5,7 @@ type Props = {
   jobs: Job[]
   selectedJobId?: string
   onSelect: (job: Job) => void
+  title?: string
 }
 
 const statusLabel: Record<string, string> = {
@@ -23,10 +24,10 @@ const statusColor = (status: string): 'default' | 'primary' | 'success' | 'warni
   return 'default'
 }
 
-export function JobList({ jobs, selectedJobId, onSelect }: Props) {
+export function JobList({ jobs, selectedJobId, onSelect, title = 'Задачи' }: Props) {
   return (
     <Paper elevation={0} sx={{ p: 2 }}>
-      <Typography component="h2" variant="h6" gutterBottom>Задачи</Typography>
+      <Typography component="h2" variant="h6" gutterBottom>{title}</Typography>
       {jobs.length === 0 ? (
         <Typography color="text.secondary">Созданных задач пока нет.</Typography>
       ) : (
