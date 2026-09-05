@@ -64,7 +64,17 @@ class ClustaloBatchResult:
 
     batch_name: str
     records: tuple[AlignmentInput, ...]
-    result: ClustaloRunResult
+    result: ClustaloRunResult | None
+    exclusions: tuple["ClustaloExclusion", ...] = ()
+    command_results: tuple[CommandResult, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ClustaloExclusion:
+    """Последовательность, исключённая после безопасной диагностики Clustal."""
+
+    record: AlignmentInput
+    reason: str
 
 
 def sort_alignment_inputs(records: Sequence[AlignmentInput]) -> list[AlignmentInput]:
@@ -141,33 +151,80 @@ def run_clustalo_batches(
     job_path = validate_job_directory(job_directory, jobs_root)
     results: list[ClustaloBatchResult] = []
     for batch_name, source_groups in ALIGNMENT_BATCHES.items():
-        batch_records = tuple(record for record in records if record.group in source_groups)
-        if not batch_records:
+        source_records = tuple(record for record in records if record.group in source_groups)
+        if not source_records:
             continue
-        input_path = write_alignment_input(
-            batch_records,
-            f"{batch_name}.fasta",
-            job_directory=job_path,
-            jobs_root=jobs_root,
-        )
         output_path = job_child_path(job_path, "alignment", f"{batch_name}.aln")
-        if shutil.which("clustalo") is None:
-            result = ClustaloRunResult(
-                input_path=input_path,
-                output_path=output_path,
-                command_result=None,
-                error="Окружение обработки неисправно: не найдена команда clustalo.",
+        remaining = list(source_records)
+        exclusions: list[ClustaloExclusion] = []
+        command_results: list[CommandResult] = []
+        last_result: ClustaloRunResult | None = None
+
+        while remaining:
+            invalid = _first_invalid_fasta_record(remaining)
+            if invalid is not None:
+                remaining.remove(invalid)
+                exclusions.append(
+                    ClustaloExclusion(
+                        invalid,
+                        f"Последовательность {invalid.name} не подходит для Clustal Omega.",
+                    )
+                )
+                continue
+
+            input_path = write_alignment_input(
+                remaining,
+                f"{batch_name}.fasta",
+                job_directory=job_path,
+                jobs_root=jobs_root,
             )
-        else:
+            output_path.unlink(missing_ok=True)
+            if shutil.which("clustalo") is None:
+                last_result = ClustaloRunResult(
+                    input_path=input_path,
+                    output_path=output_path,
+                    command_result=None,
+                    error="Окружение обработки неисправно: не найдена команда clustalo.",
+                )
+                break
             command = build_clustalo_command(input_path, output_path)
             command_result = _run_command(command, cwd=job_path)
-            result = ClustaloRunResult(
+            command_results.append(command_result)
+            error = _clustalo_result_error(command_result, output_path)
+            failed_record: AlignmentInput | None = None
+            if error is not None:
+                failed_record = _record_named_in_command_output(command_result, remaining)
+            else:
+                error, failed_record = _verify_clustalo_output(output_path, remaining)
+            last_result = ClustaloRunResult(
                 input_path=input_path,
                 output_path=output_path,
                 command_result=command_result,
-                error=_clustalo_result_error(command_result, output_path),
+                error=error,
             )
-        results.append(ClustaloBatchResult(batch_name, batch_records, result))
+            if error is None:
+                break
+            if failed_record is None:
+                break
+            remaining.remove(failed_record)
+            exclusions.append(
+                ClustaloExclusion(
+                    failed_record,
+                    f"Clustal Omega не выполнил выравнивание: {error}",
+                )
+            )
+
+        result = last_result if remaining else None
+        successful_records = tuple(remaining) if result is not None and result.succeeded else ()
+        results.append(
+            ClustaloBatchResult(
+                batch_name=batch_name,
+                records=successful_records,
+                result=result,
+                exclusions=tuple(exclusions),
+                command_results=tuple(command_results),
+            )
+        )
     return tuple(results)
 
 
@@ -278,6 +335,69 @@ def _validate_fasta_record(record: AlignmentInput) -> None:
     sequence = "".join(record.sequence.split())
     if not sequence or not sequence.isascii() or not sequence.isalpha():
         raise ValueError(f"Последовательность {record.name} не подходит для Clustal Omega")
+
+
+def _first_invalid_fasta_record(records: Sequence[AlignmentInput]) -> AlignmentInput | None:
+    """Возвращает первую запись, которую нельзя безопасно записать во входной FASTA."""
+
+    for record in records:
+        try:
+            _validate_fasta_record(record)
+        except ValueError:
+            return record
+    return None
+
+
+def _record_named_in_command_output(
+    result: CommandResult,
+    records: Sequence[AlignmentInput],
+) -> AlignmentInput | None:
+    """Ищет ровно одно имя текущего входа в диагностике Clustal.
+
+    Удаление допустимо лишь при однозначном совпадении. Сообщения утилиты могут
+    содержать другие идентификаторы и не должны превращаться в случайное
+    исключение последовательности.
+    """
+
+    diagnostic = "\n".join(part for part in (result.stderr, result.stdout, result.error or "") if part)
+    if not diagnostic:
+        return None
+    matches = [
+        record
+        for record in records
+        if _contains_identifier(diagnostic, record.name) or _contains_identifier(diagnostic, msa_identifier(record.name))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _contains_identifier(text: str, identifier: str) -> bool:
+    """Проверяет полное вхождение FASTA-идентификатора в текст диагностики."""
+
+    boundary = r"A-Za-z0-9_.-"
+    return re.search(rf"(?<![{boundary}]){re.escape(identifier)}(?![{boundary}])", text) is not None
+
+
+def _verify_clustalo_output(
+    output_path: Path,
+    records: Sequence[AlignmentInput],
+) -> tuple[str | None, AlignmentInput | None]:
+    """Проверяет, что успешная команда действительно вернула все записи входа."""
+
+    try:
+        aligned = parse_clustal_alignment(output_path)
+    except ValueError as error:
+        return f"Не удалось прочитать результат Clustal Omega: {error}", None
+    missing = [
+        record
+        for record in records
+        if record.name not in aligned and msa_identifier(record.name) not in aligned
+    ]
+    if not missing:
+        return None, None
+    if len(missing) == 1:
+        record = missing[0]
+        return f"В результате Clustal Omega отсутствует последовательность {record.name}.", record
+    return "В результате Clustal Omega отсутствуют несколько последовательностей; невозможно безопасно определить исключение.", None
 
 
 def _looks_like_alignment_fragment(value: str) -> bool:

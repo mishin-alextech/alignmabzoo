@@ -63,6 +63,7 @@ export type ReportEntry = { path?: string; reason?: string }
 export type JobReport = {
   processed?: ReportEntry[]
   skipped?: ReportEntry[]
+  clustalo_exclusions?: ReportEntry[]
   errors?: ReportEntry[]
 }
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 from Bio import SeqIO
@@ -74,7 +76,14 @@ def _failure(source_path: Path, reason: str) -> ParseResult:
 def _parse_genbank(path: Path) -> Iterable[str]:
     """Извлекает кандидаты из features всех записей GenBank."""
 
-    for record in SeqIO.parse(path, "genbank"):
+    try:
+        records = list(SeqIO.parse(path, "genbank"))
+    except ValueError as error:
+        if "Did not recognise the LOCUS line layout" not in str(error):
+            raise
+        records = list(_parse_genbank_with_normalized_locus(path))
+
+    for record in records:
         for feature in record.features:
             translation = _translation_from_qualifier(feature)
             if translation is not None:
@@ -83,6 +92,44 @@ def _parse_genbank(path: Path) -> Iterable[str]:
             protein = _translate_genbank_feature(feature, record.seq)
             if protein is not None:
                 yield protein
+
+
+def _parse_genbank_with_normalized_locus(path: Path) -> Iterable[Any]:
+    """Повторно разбирает GenBank после нормализации имени в строке ``LOCUS``.
+
+    В ряде файлов SnapGene имя записи состоит из нескольких слов, например
+    ``LOCUS Untitled 3 483 bp DNA linear UNA 25-AUG-2022``. Biopython не
+    принимает такую строку, так как пробел внутри имени сдвигает остальные
+    поля. Имя записи далее не используется, поэтому для чтения оно безопасно
+    заменяется односоставным вариантом.
+    """
+
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if not line.startswith("LOCUS"):
+            continue
+        normalized = _normalize_locus_line(line)
+        if normalized is not None:
+            lines[index] = normalized
+            break
+    return SeqIO.parse(StringIO("".join(lines)), "genbank")
+
+
+def _normalize_locus_line(line: str) -> str | None:
+    """Нормализует однострочный вариант ``LOCUS`` для fallback-разбора."""
+
+    match = re.match(
+        r"^LOCUS\s+(.+?)\s+(\d+)\s+(bp|aa)\s+(.+?)(\r?\n)?$",
+        line,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+
+    name, length, unit, remainder, line_ending = match.groups()
+    normalized_name = re.sub(r"\s+", "_", name.strip())
+    return f"LOCUS       {normalized_name} {length} {unit} {remainder.strip()}{line_ending or ''}"
 
 
 def _parse_snapgene(path: Path) -> Iterable[str]:

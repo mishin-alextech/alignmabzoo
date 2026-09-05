@@ -37,12 +37,19 @@ export function AlignmentExclusions({ jobId }: Props) {
   if (!report) return <Paper variant="outlined" sx={{ p: 2 }}><CircularProgress size={22} /></Paper>
   const processed = report.processed ?? []
   const skipped = report.skipped ?? []
+  const clustaloExclusions = report.clustalo_exclusions ?? []
   const errors = report.errors ?? []
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography component="h3" variant="h6" gutterBottom>Отчёт по входным файлам</Typography>
-      <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>Обработано: {processed.length}; пропущено: {skipped.length}; ошибок: {errors.length}.</Typography>
-      <Stack spacing={1.5}><Entries title="Обработанные файлы" entries={processed} /><Divider /><Entries title="Пропущенные файлы" entries={skipped} severity="warning" /><Entries title="Файлы с ошибками" entries={errors} severity="error" /></Stack>
+      <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>Обработано: {processed.length}; пропущено: {skipped.length + clustaloExclusions.length}; ошибок: {errors.length}.</Typography>
+      <Stack spacing={1.5}>
+        <Entries title="Обработанные файлы" entries={processed} />
+        <Divider />
+        <Entries title="Пропущенные файлы" entries={skipped} severity="warning" />
+        <Entries title="Не прошедшие Clustal Omega" entries={clustaloExclusions} severity="warning" />
+        <Entries title="Файлы с ошибками" entries={errors} severity="error" />
+      </Stack>
     </Paper>
   )
 }

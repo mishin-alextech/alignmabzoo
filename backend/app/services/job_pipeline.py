@@ -104,7 +104,12 @@ async def run_job(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
 def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryService) -> None:
     record = registry.get(job_id)
     job_directory = registry.directory_for(job_id)
-    report: dict[str, list[dict[str, str]]] = {"processed": [], "skipped": [], "errors": []}
+    report: dict[str, list[dict[str, str]]] = {
+        "processed": [],
+        "skipped": [],
+        "clustalo_exclusions": [],
+        "errors": [],
+    }
     counts = {"files_found": 0, "files_processed": 0, "files_skipped": 0, "files_failed": 0, "sequences": 0}
     try:
         registry.update_status(job_id, JobStatus.RUNNING)
@@ -189,11 +194,22 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
             aligned_records: list[AlignmentInput] = []
             aligned: dict[str, str] = {}
             for batch in run_clustalo_batches(parsed_records, job_directory=job_directory, jobs_root=registry.jobs_root):
-                _log_command(job_directory, batch.result.command_result)
-                if batch.result.succeeded:
+                for command_result in batch.command_results:
+                    _log_command(job_directory, command_result)
+                for exclusion in batch.exclusions:
+                    reason = f"Не прошедшие Clustal Omega: {exclusion.reason}"
+                    report["clustalo_exclusions"].append(
+                        {
+                            "path": parsed_paths.get(exclusion.record.name, exclusion.record.name),
+                            "reason": reason,
+                        }
+                    )
+                    counts["files_skipped"] += 1
+                    _append_log(job_directory, f"{reason} Исключена последовательность {exclusion.record.name}.")
+                if batch.result is not None and batch.result.succeeded:
                     aligned.update(parse_clustal_alignment(batch.result.output_path))
                     aligned_records.extend(batch.records)
-                else:
+                elif batch.result is not None:
                     reason = batch.result.error or "Непредвиденная ошибка Clustal Omega."
                     report["errors"].append({"path": f"alignment/{batch.batch_name}", "reason": reason})
                     _append_log(job_directory, f"Ошибка выравнивания {batch.batch_name}: {reason}")
@@ -204,7 +220,11 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
             report["skipped"].append({"path": "job", "reason": "Не найдено пригодных последовательностей для выравнивания."})
             counts["files_skipped"] += 1
         _write_report(job_directory, report)
-        final_status = JobStatus.PARTIAL if report["errors"] or report["skipped"] else JobStatus.DONE
+        final_status = (
+            JobStatus.PARTIAL
+            if report["errors"] or report["skipped"] or report["clustalo_exclusions"]
+            else JobStatus.DONE
+        )
         registry.update_status(job_id, final_status, counts=JobCounts(**counts))
         _append_log(job_directory, f"Job завершена со статусом {final_status.value}.")
     except Exception as error:
