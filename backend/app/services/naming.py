@@ -70,6 +70,7 @@ def name_chain(animal_code: str, project_name: str, source_name: str) -> NamingR
 
     source_stem = _source_stem(source_name)
     project_base = _PROJECT_SUFFIX_RE.split(project_name, maxsplit=1)[0]
+    project_base = _without_animal_prefix(project_base, animal_code)
 
     clone, clone_diagnostic = _extract_clone(source_stem, project_base, animal_code)
     group = _detect_group(source_stem)
@@ -96,6 +97,22 @@ def _source_stem(source_name: str) -> str:
     filename = source_name.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
     stem, separator, _extension = filename.rpartition(".")
     return stem if separator and stem else filename
+
+
+def _without_animal_prefix(project_base: str, animal_code: str) -> str:
+    """Удаляет отдельный начальный код животного из имени проекта.
+
+    В структуре каталога проекты могут называться ``Cm AFP-L3`` или
+    ``Cm_AFP-L3``, хотя код животного уже передан отдельно. Удаляем только
+    точный начальный токен с разделителем-пробелом либо ``_``; сравнение
+    остаётся чувствительным к регистру.
+    """
+
+    if not animal_code:
+        return project_base
+    marker = re.compile(rf"^{re.escape(animal_code)}(?:[ _]+)(.+)$")
+    match = marker.fullmatch(project_base)
+    return match.group(1) if match is not None else project_base
 
 
 def _extract_clone(source_stem: str, project_base: str, animal_code: str) -> tuple[str, str | None]:

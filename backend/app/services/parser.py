@@ -12,7 +12,7 @@ from Bio.Seq import Seq
 import autosnapgene
 
 
-MIN_PROTEIN_LENGTH = 20
+MIN_PROTEIN_LENGTH = 80
 SUPPORTED_SUFFIXES = frozenset({".dna", ".gb", ".genbank"})
 
 
@@ -60,7 +60,7 @@ def parse_sequence_file(path: str | Path) -> ParseResult:
     if sequence is None:
         return _failure(
             source_path,
-            f"В файле {filename} не найдена белковая последовательность CDS длиной не менее {MIN_PROTEIN_LENGTH} а.к.",
+            f"В файле {filename} не найдена белковая последовательность длиной не менее {MIN_PROTEIN_LENGTH} а.к.",
         )
     return ParseResult(source_path=source_path, filename=filename, sequence=sequence)
 
@@ -72,12 +72,10 @@ def _failure(source_path: Path, reason: str) -> ParseResult:
 
 
 def _parse_genbank(path: Path) -> Iterable[str]:
-    """Извлекает кандидаты из CDS всех записей GenBank."""
+    """Извлекает кандидаты из features всех записей GenBank."""
 
     for record in SeqIO.parse(path, "genbank"):
         for feature in record.features:
-            if feature.type != "CDS":
-                continue
             translation = _translation_from_qualifier(feature)
             if translation is not None:
                 yield translation
@@ -88,12 +86,10 @@ def _parse_genbank(path: Path) -> Iterable[str]:
 
 
 def _parse_snapgene(path: Path) -> Iterable[str]:
-    """Извлекает кандидаты из CDS-функций SnapGene."""
+    """Извлекает кандидаты из всех features SnapGene."""
 
     snapgene_file = autosnapgene.SnapGene(str(path))
     for feature in snapgene_file.features:
-        if getattr(feature, "type", None) != "CDS":
-            continue
         translation = _translation_from_qualifier(feature)
         if translation is not None:
             yield translation
@@ -116,7 +112,7 @@ def _translation_from_qualifier(feature: Any) -> str | None:
 
 
 def _translate_genbank_feature(feature: Any, record_sequence: Seq) -> str | None:
-    """Транслирует CDS GenBank, доверяя Biopython orientation и compound location."""
+    """Транслирует feature GenBank, доверяя Biopython orientation и compound location."""
 
     location = getattr(feature, "location", None)
     if location is None:
@@ -129,7 +125,7 @@ def _translate_genbank_feature(feature: Any, record_sequence: Seq) -> str | None
 
 
 def _translate_snapgene_feature(feature: Any, full_sequence: str) -> str | None:
-    """Транслирует CDS SnapGene с учётом сегментов, направления и codon_start."""
+    """Транслирует feature SnapGene с учётом сегментов, направления и codon_start."""
 
     try:
         nucleotides = "".join(
@@ -176,7 +172,9 @@ def _clean_protein(sequence: str) -> str | None:
     cleaned = "".join(sequence.split()).upper()
     if "*" in cleaned:
         cleaned = cleaned.split("*", maxsplit=1)[0]
-    return cleaned or None
+    if not cleaned or not cleaned.isascii() or not cleaned.isalpha():
+        return None
+    return cleaned
 
 
 def _longest_protein(candidates: Iterable[str | None]) -> str | None:

@@ -131,6 +131,16 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 counts["files_failed"] += 1
                 _append_log(job_directory, f"Ошибка файла {relative}: {reason}")
                 continue
+            sequence = _normalize_protein_sequence(result.sequence)
+            if sequence is None:
+                reason = (
+                    "Белковая последовательность содержит недопустимые символы "
+                    "после удаления пробелов и нормализации регистра."
+                )
+                report["errors"].append({"path": relative, "reason": reason})
+                counts["files_failed"] += 1
+                _append_log(job_directory, f"Ошибка файла {relative}: {reason}")
+                continue
             named = name_chain(selected_group.animal_code, selected_group.project_name, result.filename)
             base_name = (
                 f"{named.group}_{selected_group.animal_code}_{named.clone}"
@@ -144,7 +154,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_log(job_directory, f"Переименование {relative}: {sequence_name}.")
             if named.diagnostic:
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
-            parsed_records.append(AlignmentInput(sequence_name, result.sequence, named.group, selected_group.animal_code))
+            parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code))
             parsed_paths[sequence_name] = relative
             report["processed"].append({"path": relative, "name": sequence_name})
             counts["files_processed"] += 1
@@ -231,6 +241,15 @@ def _unique_name(value: str, used: set[str]) -> str:
         index += 1
     used.add(candidate)
     return candidate
+
+
+def _normalize_protein_sequence(sequence: str) -> str | None:
+    """Удаляет пробелы и отклоняет символы, недопустимые во входном FASTA."""
+
+    normalized = "".join(sequence.split()).upper()
+    if not normalized or not normalized.isascii() or not normalized.isalpha():
+        return None
+    return normalized
 
 
 def _write_parsed_fasta(directory: Path, records: list[AlignmentInput], paths: Mapping[str, str]) -> None:
