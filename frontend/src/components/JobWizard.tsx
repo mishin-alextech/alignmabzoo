@@ -11,7 +11,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, api, type Animal, type Job, type JobSelection } from '../api/client'
 
 type Props = { onCreated: (job: Job) => void }
@@ -32,6 +32,30 @@ export function JobWizard({ onCreated }: Props) {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string>()
+  const [logLines, setLogLines] = useState<string[]>([])
+  const logRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+
+  // Лог «под капотом»: пользователь видит, что именно происходит при выборе
+  // животных/проектов/групп (запросы к API, найденные проекты и группы).
+  const appendLog = useCallback((line: string) => {
+    const timestamp = new Date().toLocaleTimeString('ru-RU', { hour12: false })
+    setLogLines((current) => [...current.slice(-499), `[${timestamp}] ${line}`])
+  }, [])
+
+  // Автопрокрутка лога вниз при новых строках, если пользователь не прокрутил вверх.
+  useEffect(() => {
+    const element = logRef.current
+    if (element && stickToBottomRef.current) {
+      element.scrollTop = element.scrollHeight
+    }
+  }, [logLines])
+
+  const handleLogScroll = () => {
+    const element = logRef.current
+    if (!element) return
+    stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24
+  }
 
   useEffect(() => {
     let active = true
@@ -45,19 +69,32 @@ export function JobWizard({ onCreated }: Props) {
   useEffect(() => {
     let active = true
     const absent = selectedAnimals.filter((code) => projects[code] === undefined)
+    if (absent.length > 0) {
+      appendLog(`Загружаю проекты для: ${absent.join(', ')}…`)
+    }
     void Promise.all(absent.map(async (code) => [code, await api.projects(code)] as const)).then(
       (items) => {
         if (!active) return
         setProjects((current) => ({ ...current, ...Object.fromEntries(items) }))
+        for (const [code, list] of items) {
+          appendLog(list.length > 0 ? `Проекты ${code}: ${list.length} шт. (${list.join(', ')})` : `Проекты ${code}: не найдены.`)
+        }
       },
-      (reason) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить проекты.') },
+      (reason) => {
+        if (!active) return
+        appendLog(`Ошибка загрузки проектов: ${reason instanceof ApiError ? reason.message : 'не удалось загрузить проекты.'}`)
+        setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить проекты.')
+      },
     )
     return () => { active = false }
-  }, [selectedAnimals, projects])
+  }, [selectedAnimals, projects, appendLog])
 
   useEffect(() => {
     let active = true
     const missing = selectedProjects.filter((projectKey) => groups[projectKey] === undefined)
+    if (missing.length > 0) {
+      appendLog(`Загружаю группы для: ${missing.map((key) => key.split('\u0000').join(' / ')).join(', ')}…`)
+    }
     void Promise.all(missing.map(async (projectKey) => {
       const [animalCode, project] = projectKey.split('\u0000')
       return [projectKey, await api.groups(animalCode, project)] as const
@@ -65,11 +102,19 @@ export function JobWizard({ onCreated }: Props) {
       (items) => {
         if (!active) return
         setGroups((current) => ({ ...current, ...Object.fromEntries(items) }))
+        for (const [projectKey, list] of items) {
+          const label = projectKey.split('\u0000').join(' / ')
+          appendLog(list.length > 0 ? `Группы ${label}: ${list.length} шт. (${list.join(', ')})` : `Группы ${label}: не найдены.`)
+        }
       },
-      (reason) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить группы.') },
+      (reason) => {
+        if (!active) return
+        appendLog(`Ошибка загрузки групп: ${reason instanceof ApiError ? reason.message : 'не удалось загрузить группы.'}`)
+        setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить группы.')
+      },
     )
     return () => { active = false }
-  }, [selectedProjects, groups])
+  }, [selectedProjects, groups, appendLog])
 
   const selection = useMemo<JobSelection>(() => ({
     animals: selectedAnimals.map((code) => ({
@@ -88,11 +133,35 @@ export function JobWizard({ onCreated }: Props) {
   }), [allGroups, groups, selectedAnimals, selectedGroups, selectedProjects])
 
   const toggleAnimal = (code: string) => {
+    const isRemoving = selectedAnimals.includes(code)
+    appendLog(isRemoving ? `Снято животное: ${code}` : `Выбрано животное: ${code}`)
     setSelectedAnimals((current) => current.includes(code) ? current.filter((item) => item !== code) : [...current, code])
+    if (isRemoving) {
+      // При снятии животного удаляем его проекты и группы, чтобы не было
+      // висящих selectedProjects/selectedGroups и лишних запросов к API.
+      const prefix = `${code}\u0000`
+      setSelectedProjects((current) => current.filter((key) => !key.startsWith(prefix)))
+      setSelectedGroups((current) => {
+        const next = { ...current }
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(prefix)) delete next[key]
+        }
+        return next
+      })
+      setAllGroups((current) => {
+        const next = { ...current }
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(prefix)) delete next[key]
+        }
+        return next
+      })
+    }
   }
 
   const toggleProject = (animalCode: string, project: string) => {
     const projectKey = keyFor(animalCode, project)
+    const isRemoving = selectedProjects.includes(projectKey)
+    appendLog(isRemoving ? `Снят проект: ${animalCode} / ${project}` : `Выбран проект: ${animalCode} / ${project}`)
     setSelectedProjects((current) => current.includes(projectKey) ? current.filter((item) => item !== projectKey) : [...current, projectKey])
   }
 
@@ -108,7 +177,9 @@ export function JobWizard({ onCreated }: Props) {
   }
 
   const toggleGroup = (projectKey: ProjectKey, group: string) => {
-    const next = (selectedGroups[projectKey] ?? []).includes(group)
+    const isRemoving = (selectedGroups[projectKey] ?? []).includes(group)
+    appendLog(isRemoving ? `Снята группа: ${projectKey.split('\u0000').join(' / ')} / ${group}` : `Выбрана группа: ${projectKey.split('\u0000').join(' / ')} / ${group}`)
+    const next = isRemoving
       ? (selectedGroups[projectKey] ?? []).filter((item) => item !== group)
       : [...(selectedGroups[projectKey] ?? []), group]
     setAllGroups((current) => ({ ...current, [projectKey]: false }))
@@ -176,6 +247,16 @@ export function JobWizard({ onCreated }: Props) {
           })}
         </>}
         <Box><Button variant="contained" disabled={creating || loading} onClick={() => void createJob()}>{creating ? 'Создание…' : 'Запустить пайплайн'}</Button></Box>
+        <Divider />
+        <Typography component="h3" variant="subtitle1">Журнал выбора (что происходит «под капотом»)</Typography>
+        <Box
+          ref={logRef}
+          onScroll={handleLogScroll}
+          component="pre"
+          sx={{ m: 0, maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, bgcolor: 'grey.50', border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}
+        >
+          {logLines.length > 0 ? logLines.join('\n') : 'Пока пусто. Выберите животное — здесь появится, какие проекты и группы загружаются.'}
+        </Box>
       </Stack>
     </Paper>
   )

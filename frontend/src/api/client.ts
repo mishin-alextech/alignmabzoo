@@ -83,15 +83,25 @@ function errorMessage(payload: unknown, fallback: string): string {
   return fallback
 }
 
+const REQUEST_TIMEOUT_MS = 30_000
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let response: Response
   try {
     response = await fetch(`/api${path}`, {
       ...init,
+      signal: controller.signal,
       headers: { Accept: 'application/json', ...init?.headers },
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('Превышено время ожидания запроса (30 с).')
+    }
     throw new ApiError('Не удалось связаться с сервером.')
+  } finally {
+    clearTimeout(timeout)
   }
 
   if (!response.ok) {
@@ -145,13 +155,21 @@ export const api = {
   },
 
   async log(jobId: string): Promise<string> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     let response: Response
     try {
       response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/log`, {
+        signal: controller.signal,
         headers: { Accept: 'text/plain, application/json' },
       })
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new ApiError('Превышено время ожидания запроса (30 с).')
+      }
       throw new ApiError('Не удалось получить журнал job.')
+    } finally {
+      clearTimeout(timeout)
     }
     if (!response.ok) {
       throw new ApiError(`Не удалось получить журнал job (${response.status}).`, response.status)
