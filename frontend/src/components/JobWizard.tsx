@@ -11,13 +11,39 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError, api, type Animal, type Job, type JobSelection } from '../api/client'
 
 type Props = { onCreated: (job: Job) => void }
 type ProjectKey = `${string}\u0000${string}`
 
 const keyFor = (animalCode: string, project: string): ProjectKey => `${animalCode}\u0000${project}`
+
+const VIRTUAL_ITEM_HEIGHT = 40
+const VIRTUAL_VIEWPORT_HEIGHT = 320
+
+function VirtualizedList({ items, renderItem }: { items: string[]; renderItem: (item: string) => ReactNode }) {
+  const [scrollTop, setScrollTop] = useState(0)
+  const overscan = 4
+  const start = Math.max(0, Math.floor(scrollTop / VIRTUAL_ITEM_HEIGHT) - overscan)
+  const end = Math.min(items.length, Math.ceil((scrollTop + VIRTUAL_VIEWPORT_HEIGHT) / VIRTUAL_ITEM_HEIGHT) + overscan)
+  const visibleItems = items.slice(start, end)
+
+  return (
+    <Box
+      sx={{ height: Math.min(VIRTUAL_VIEWPORT_HEIGHT, Math.max(VIRTUAL_ITEM_HEIGHT, items.length * VIRTUAL_ITEM_HEIGHT)), overflowY: 'auto', position: 'relative', border: 1, borderColor: 'divider', borderRadius: 1 }}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <Box sx={{ height: items.length * VIRTUAL_ITEM_HEIGHT, position: 'relative' }}>
+        {visibleItems.map((item, index) => (
+          <Box key={item} sx={{ height: VIRTUAL_ITEM_HEIGHT, position: 'absolute', top: (start + index) * VIRTUAL_ITEM_HEIGHT, left: 0, right: 0, display: 'flex', alignItems: 'center' }}>
+            {renderItem(item)}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
 
 async function sequentialMap<T, R>(items: T[], callback: (item: T) => Promise<R>, signal: AbortSignal): Promise<R[]> {
   const result: R[] = []
@@ -235,7 +261,7 @@ export function JobWizard({ onCreated }: Props) {
           {selectedAnimals.map((code) => (
             <Box key={code}>
               <Typography variant="subtitle1">{animals.find((animal) => animal.code === code)?.name ?? code}</Typography>
-              {projects[code] === undefined ? <CircularProgress size={20} /> : projects[code].length === 0 ? <Typography color="text.secondary">Проекты не найдены.</Typography> : projects[code].map((project) => <FormControlLabel key={project} control={<Checkbox checked={selectedProjects.includes(keyFor(code, project))} onChange={() => toggleProject(code, project)} />} label={selectedAnimals.length > 1 ? `${code} ${project}` : project} />)}
+              {projects[code] === undefined ? <CircularProgress size={20} /> : projects[code].length === 0 ? <Typography color="text.secondary">Проекты не найдены.</Typography> : <VirtualizedList items={projects[code]} renderItem={(project) => <FormControlLabel control={<Checkbox checked={selectedProjects.includes(keyFor(code, project))} onChange={() => toggleProject(code, project)} />} label={selectedAnimals.length > 1 ? `${code} ${project}` : project} />} />}
             </Box>
           ))}
         </>}
@@ -252,7 +278,7 @@ export function JobWizard({ onCreated }: Props) {
               <Typography variant="subtitle1">{selectedAnimals.length > 1 ? `${code} ${project}` : project}</Typography>
               {knownGroups === undefined ? <CircularProgress size={20} /> : <>
                 <FormControlLabel control={<Checkbox checked={Boolean(allGroups[projectKey])} onChange={(event) => setProjectAllGroups(projectKey, event.target.checked)} />} label="Все группы этого проекта" />
-                {!allGroups[projectKey] && (knownGroups.length === 0 ? <Typography color="text.secondary">Группы не найдены.</Typography> : <Box display="flex" flexWrap="wrap" gap={1}>{knownGroups.map((group) => <FormControlLabel key={group} control={<Checkbox checked={(selectedGroups[projectKey] ?? []).includes(group)} onChange={() => toggleGroup(projectKey, group)} />} label={group} />)}</Box>)}
+                {!allGroups[projectKey] && (knownGroups.length === 0 ? <Typography color="text.secondary">Группы не найдены.</Typography> : <VirtualizedList items={knownGroups} renderItem={(group) => <FormControlLabel control={<Checkbox checked={(selectedGroups[projectKey] ?? []).includes(group)} onChange={() => toggleGroup(projectKey, group)} />} label={group} />} />)}
               </>}
             </Box>
           })}
