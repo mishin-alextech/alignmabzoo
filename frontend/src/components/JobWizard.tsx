@@ -142,16 +142,16 @@ export function JobWizard({ onCreated }: Props) {
       const prefix = `${code}\u0000`
       setSelectedProjects((current) => current.filter((key) => !key.startsWith(prefix)))
       setSelectedGroups((current) => {
-        const next = { ...current }
-        for (const key of Object.keys(next)) {
-          if (key.startsWith(prefix)) delete next[key]
+        const next: Record<ProjectKey, string[]> = {}
+        for (const key of Object.keys(current) as ProjectKey[]) {
+          if (!key.startsWith(prefix)) next[key] = current[key]
         }
         return next
       })
       setAllGroups((current) => {
-        const next = { ...current }
-        for (const key of Object.keys(next)) {
-          if (key.startsWith(prefix)) delete next[key]
+        const next: Record<ProjectKey, boolean> = {}
+        for (const key of Object.keys(current) as ProjectKey[]) {
+          if (!key.startsWith(prefix)) next[key] = current[key]
         }
         return next
       })
@@ -168,10 +168,10 @@ export function JobWizard({ onCreated }: Props) {
   const setProjectAllGroups = (projectKey: ProjectKey, useAll: boolean) => {
     setAllGroups((current) => ({ ...current, [projectKey]: useAll }))
     if (applyToAll) {
-      setAllGroups((current) => Object.fromEntries(selectedProjects.map((key) => [key, useAll])))
+      setAllGroups((current) => ({ ...current, ...Object.fromEntries(selectedProjects.map((key) => [key, useAll] as const)) }))
       if (!useAll) {
         const source = selectedGroups[projectKey] ?? []
-        setSelectedGroups((current) => Object.fromEntries(selectedProjects.map((key) => [key, source.filter((group) => (groups[key] ?? []).includes(group))])))
+        setSelectedGroups((current) => ({ ...current, ...Object.fromEntries(selectedProjects.map((key) => [key, source.filter((group) => (groups[key] ?? []).includes(group))] as const)) }))
       }
     }
   }
@@ -184,10 +184,10 @@ export function JobWizard({ onCreated }: Props) {
       : [...(selectedGroups[projectKey] ?? []), group]
     setAllGroups((current) => ({ ...current, [projectKey]: false }))
     if (applyToAll) {
-      setAllGroups((current) => Object.fromEntries(selectedProjects.map((key) => [key, false])))
+      setAllGroups((current) => ({ ...current, ...Object.fromEntries(selectedProjects.map((key) => [key, false] as const)) }))
       setSelectedGroups((current) => ({
         ...current,
-        ...Object.fromEntries(selectedProjects.map((key) => [key, next.filter((item) => (groups[key] ?? []).includes(item))])),
+        ...Object.fromEntries(selectedProjects.map((key) => [key, next.filter((item) => (groups[key] ?? []).includes(item))] as const)),
       }))
     } else setSelectedGroups((current) => ({ ...current, [projectKey]: next }))
   }

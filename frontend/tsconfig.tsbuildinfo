@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/theme.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/components/AlignmentExclusions.tsx","./src/components/AlignmentViewer.tsx","./src/components/JobList.tsx","./src/components/JobResults.tsx","./src/components/JobStatus.tsx","./src/components/JobWizard.tsx"],"version":"5.9.3"}
