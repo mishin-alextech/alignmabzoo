@@ -46,13 +46,12 @@
   (ранее `data_root / code / project_name / group_name`).
 
 #### 3. `docker-compose.yml`
-- Volume: `/home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro` →
-  `/home/bioinfo/synced/data/mabzoo:/synced_data/mabzoo:ro`
-  (реальный путь данных на хосте — `/home/bioinfo/synced/data/mabzoo`).
+- Volume: `/home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro`
+  (реальный путь данных на хосте — `/home/bioinfo/synced_data/mabzoo`).
 
 #### 4. `backend/app/config.py`
 - Значение по умолчанию `data_root`: `/synced_data/mabzoo` →
-  `/home/bioinfo/synced/data/mabzoo` (совпадает с путём на хосте; в контейнере
+  `/home/bioinfo/synced_data/mabzoo` (совпадает с путём на хосте; в контейнере
   путь переопределяется `ALIGNMABZOO_DATA_ROOT=/synced_data/mabzoo`).
 
 ### Не изменено

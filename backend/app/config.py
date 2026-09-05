@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ALIGNMABZOO_", extra="ignore")
 
-    data_root: Path = Path("/home/bioinfo/synced/data/mabzoo")
+    data_root: Path = Path("/home/bioinfo/synced_data/mabzoo")
     jobs_root: Path = Path("/app/jobs")
     static_root: Path = Path("/app/app/static")
 
