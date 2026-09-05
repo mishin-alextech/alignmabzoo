@@ -114,6 +114,8 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         if not runtime.is_available:
             raise RuntimeError(runtime.error or "Окружение обработки неисправно.")
         selected = validate_selection(record.selection.root, discovery)
+        selected_animals = tuple(dict.fromkeys(item.animal_code for item in selected))
+        include_animal_code = len(selected_animals) > 1
         source_files = list(_discover_files(selected))
         counts["files_found"] = len(source_files)
         _append_log(job_directory, f"Найдено входных файлов: {len(source_files)}.")
@@ -130,9 +132,14 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_log(job_directory, f"Ошибка файла {relative}: {reason}")
                 continue
             named = name_chain(selected_group.animal_code, selected_group.project_name, result.filename)
-            sequence_name = _unique_name(named.name, used_names)
-            if sequence_name != named.name:
-                _append_log(job_directory, f"Переименование {relative}: {named.name} → {sequence_name}.")
+            base_name = (
+                f"{named.group}_{selected_group.animal_code}_{named.clone}"
+                if include_animal_code
+                else named.name
+            )
+            sequence_name = _unique_name(base_name, used_names)
+            if sequence_name != base_name:
+                _append_log(job_directory, f"Переименование {relative}: {base_name} → {sequence_name}.")
             else:
                 _append_log(job_directory, f"Переименование {relative}: {sequence_name}.")
             if named.diagnostic:
@@ -145,7 +152,6 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         _write_named_fasta(job_directory, parsed_records)
         counts["sequences"] = len(parsed_records)
         numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
-        selected_animals = tuple(dict.fromkeys(item.animal_code for item in selected))
         if parsed_records:
             anarci_results = run_anarci_for_records(
                 input_fasta=job_child_path(job_directory, "chains_named.fasta"),

@@ -1,5 +1,5 @@
 import { Alert, Box, Button, Paper, Stack, Typography } from '@mui/material'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ApiError, api, type AlignmentResponse, type CdrScheme } from '../api/client'
 import { AlignmentExclusions } from './AlignmentExclusions'
 import { AlignmentViewer } from './AlignmentViewer'
@@ -26,7 +26,7 @@ export function JobResults({ jobId, status }: Props) {
     return () => { active = false }
   }, [jobId, status])
 
-  const csvFiles = useMemo(() => Array.from(new Set((alignment?.groups ?? []).flatMap((group) => group.sequences.flatMap((sequence) => schemes.map((scheme) => `${sequence.name}_${scheme}.csv`))))), [alignment])
+  const csvFiles = schemes.map((scheme) => `${scheme}.csv`)
   if (status !== 'done' && status !== 'partial') return null
 
   return (

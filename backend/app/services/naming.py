@@ -102,6 +102,18 @@ def _extract_clone(source_stem: str, project_base: str, animal_code: str) -> tup
     """Извлекает клон в установленном порядке и сохраняет имя при неуспехе."""
 
     if project_base:
+        # Сначала сопоставляем составное имя проекта, считая пробел и "_"
+        # эквивалентными разделителями. Это должно предшествовать буквальному
+        # поиску: в ``Ov_HBE90001`` буквальное совпадение ``Ov_HBE`` оставляет
+        # лишь ``90001``, тогда как клоном является ``HBE90001``.
+        clone = _clone_from_separator_flexible_project_name(source_stem, project_base)
+        if clone:
+            return clone, None
+
+        clone = _clone_from_project_token(source_stem, project_base)
+        if clone:
+            return clone, None
+
         position = source_stem.find(project_base)
         if position >= 0:
             clone = _token_after(source_stem, position + len(project_base))
@@ -127,11 +139,72 @@ def _token_after(value: str, position: int) -> str | None:
     """Возвращает ближайший буквенно-цифровой фрагмент после известного маркера."""
 
     match = _ALPHANUMERIC_RUN_RE.search(value, position)
-    return match.group(0) if match is not None else None
+    candidate = match.group(0) if match is not None else None
+    if _has_letter(candidate):
+        return candidate
+    if candidate is None or not candidate.isdigit() or match is None:
+        return None
+
+    preceding_runs = list(_ALPHANUMERIC_RUN_RE.finditer(value, 0, match.start()))
+    for preceding in reversed(preceding_runs):
+        prefix = preceding.group(0)
+        if _has_letter(prefix):
+            return f"{prefix}{candidate}"
+    return None
+
+
+def _has_letter(candidate: str | None) -> bool:
+    """Проверяет, что кандидат идентификатора клона содержит букву."""
+
+    return candidate is not None and any(character.isalpha() for character in candidate)
+
+
+def _clone_from_separator_flexible_project_name(
+    source_stem: str,
+    project_base: str,
+) -> str | None:
+    """Ищет точное имя проекта, когда пробелы в имени файла заменены подчёркиваниями.
+
+    Последняя часть имени проекта может быть непосредственно продолжена номером
+    клона. Например, ``Ov HBE`` в ``VHeavy_cDNA_Ov_HBE90001`` даёт
+    ``HBE90001``. Регистр букв и сами части проекта должны совпасть точно.
+    """
+
+    parts = [part for part in re.split(r"[ _]+", project_base) if part]
+    if len(parts) < 2:
+        return None
+
+    prefix = r"[ _]+".join(re.escape(part) for part in parts[:-1])
+    final_part = re.escape(parts[-1])
+    marker = re.compile(
+        rf"(?<![A-Za-z0-9]){prefix}[ _]+({final_part}[A-Za-z0-9]*)"
+    )
+    match = marker.search(source_stem)
+    candidate = match.group(1) if match is not None else None
+    return candidate if _has_letter(candidate) else None
+
+
+def _clone_from_project_token(source_stem: str, project_base: str) -> str | None:
+    """Возвращает полный токен, начинающийся с одиночного имени проекта.
+
+    Например, проект ``HBE`` в ``VHeavy_cDNA_Ov_HBE90001`` должен дать
+    ``HBE90001``. Поиск выполняется по границам алфавитно-цифрового токена,
+    поэтому не принимает частичное совпадение внутри другого идентификатора.
+    """
+
+    if not re.fullmatch(r"[A-Za-z0-9]+", project_base):
+        return None
+    marker = re.compile(
+        rf"(?<![A-Za-z0-9])({re.escape(project_base)}[A-Za-z0-9]+)(?![A-Za-z0-9])"
+    )
+    match = marker.search(source_stem)
+    candidate = match.group(1) if match is not None else None
+    return candidate if _has_letter(candidate) else None
 
 
 def _fallback_project_clone(source_stem: str, project_base: str) -> str | None:
-    """Ищет фрагмент с совпадением хотя бы двух из первых трёх знаков проекта.
+    """Ищет фрагмент с двумя символами из первых трёх символов проекта
+    в исходном порядке.
 
     Сокращённый маркер сохраняется в клоне: для ``PTH`` и ``PT92485`` итогом
     будет ``PT92485``, как предписано форматом исходных данных.
@@ -142,7 +215,7 @@ def _fallback_project_clone(source_stem: str, project_base: str) -> str | None:
         return None
     for run in _ALPHANUMERIC_RUN_RE.finditer(source_stem):
         candidate = run.group(0)
-        if _matching_prefix_characters(candidate, project_prefix) >= 2:
+        if _has_letter(candidate) and _matching_prefix_characters(candidate, project_prefix) >= 2:
             return candidate
     return None
 
