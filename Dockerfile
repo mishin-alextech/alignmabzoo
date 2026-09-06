@@ -56,6 +56,7 @@ RUN apt-get update \
         ca-certificates \
         clustalo \
         hmmer \
+        libatomic1 \
         libgomp1 \
         libbz2-1.0 \
     && rm -rf /var/lib/apt/lists/*
