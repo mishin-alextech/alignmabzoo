@@ -24,7 +24,9 @@ RUN apt-get update \
         cmake \
         g++ \
         git \
+        cargo \
         make \
+        rustc \
         zlib1g-dev \
         libbz2-dev \
     && mkdir mmseqs2 \
