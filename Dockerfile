@@ -11,27 +11,22 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.12-slim-bookworm AS mmseqs-builder
+FROM rust:1.88-bookworm AS mmseqs-builder
 
 ARG MMSEQS_REPOSITORY=https://github.com/soedinglab/MMseqs2.git
 ARG MMSEQS_GIT_REF=master
 
 WORKDIR /build
 
-ENV PATH=/root/.cargo/bin:$PATH
-
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
         cmake \
-        curl \
         g++ \
         git \
         make \
         zlib1g-dev \
         libbz2-dev \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --profile minimal --default-toolchain stable \
     && rustc --version \
     && cargo --version \
     && mkdir mmseqs2 \
