@@ -13,7 +13,7 @@ services:
       MMSEQS_NUM_THREADS: "1"
     volumes:
       - /home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro
-      - /home/bioinfo/containers/alignmabzoo/jobs:/app/jobs
+      - /home/bioinfo/containers/alignmabzoo-dev/jobs:/app/jobs
     ports:
       - "127.0.0.1:5000:8000"
     expose:
