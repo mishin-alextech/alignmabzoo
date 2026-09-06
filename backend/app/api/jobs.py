@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.services.discovery import DiscoveryService, get_discovery_service
 from app.services.job_pipeline import SelectionError, schedule_job, validate_selection
+from app.services.realignment import schedule_realignment
 from app.services.job_registry import JobNotFoundError, JobRecord, JobRegistry, JobRegistryError, get_job_registry
 
 
@@ -26,6 +27,12 @@ class JobDeleteRequest(BaseModel):
     """Запрос пакетного удаления завершённых job."""
 
     job_ids: list[str] = Field(min_length=1)
+
+
+class RealignRequest(BaseModel):
+    """Запрос повторного выравнивания по стабильным ID последовательностей."""
+
+    sequence_ids: list[str] = Field(min_length=1)
 
 
 RegistryDependency = Annotated[JobRegistry, Depends(get_job_registry)]
@@ -85,6 +92,37 @@ async def get_job(job_id: JobId, registry: RegistryDependency) -> JobRecord:
         return registry.get(job_id)
     except JobRegistryError as error:
         raise _registry_error(error) from error
+
+
+@router.post("/{job_id}/realign", response_model=JobRecord, status_code=201)
+async def realign_job(
+    job_id: JobId,
+    request: RealignRequest,
+    registry: RegistryDependency,
+) -> JobRecord:
+    """Создаёт производную job по сохранённым белкам родительской job."""
+
+    try:
+        parent = registry.get(job_id)
+        parent_directory = registry.directory_for(job_id)
+        alignment = json.loads(_text_artifact(registry, job_id, "alignment.json"))
+        available_ids = {
+            sequence.get("id")
+            for group in alignment.get("groups", [])
+            if isinstance(group, dict)
+            for sequence in group.get("sequences", [])
+            if isinstance(sequence, dict) and isinstance(sequence.get("id"), str)
+        }
+        selected_ids = tuple(dict.fromkeys(request.sequence_ids))
+        if not set(selected_ids).issubset(available_ids):
+            raise JobRegistryError("Один или несколько sequence_id отсутствуют в родительском выравнивании.")
+        job = registry.create_derived(parent.id, selected_ids)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="Артефакт alignment.json содержит некорректный JSON.") from error
+    except JobRegistryError as error:
+        raise _registry_error(error) from error
+    schedule_realignment(job.id, registry)
+    return job
 
 
 @router.get("/{job_id}/alignments")

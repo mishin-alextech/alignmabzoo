@@ -37,6 +37,7 @@ class AlignmentInput:
     sequence: str
     group: str
     animal_code: str
+    source: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +277,7 @@ def build_alignment_document(
                 "id": record.id,
                 "name": record.name,
                 "seq": aligned,
+                "source": dict(record.source),
                 "numbering": numbering_json,
                 "cdr": cdr_json,
             }

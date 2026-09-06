@@ -10,16 +10,19 @@ services:
       ALIGNMABZOO_DATA_ROOT: /synced_data/mabzoo
       ALIGNMABZOO_JOBS_ROOT: /app/jobs
       MAX_CONCURRENT_JOBS: "2"
+      MMSEQS_NUM_THREADS: "1"
     volumes:
       - /home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro
       - /home/bioinfo/containers/alignmabzoo/jobs:/app/jobs
+    ports:
+      - "127.0.0.1:5000:8000"
     expose:
       - "8000"
     cpus: 2.0
     networks:
       - internal-net
     # После `docker compose build` обязательно выполнить внутри образа:
-    # docker compose run --rm --no-deps alignmabzoo sh -c 'python -c "import anarci; from pathlib import Path; hmm = Path(anarci.__file__).parent / \"dat\" / \"HMMs\" / \"ALL.hmm\"; assert hmm.is_file(), hmm" && ANARCI --help && hmmscan -h && clustalo --version'
+    # docker compose run --rm --no-deps alignmabzoo sh -c 'python -c "import anarci; from pathlib import Path; hmm = Path(anarci.__file__).parent / \"dat\" / \"HMMs\" / \"ALL.hmm\"; assert hmm.is_file(), hmm" && ANARCI --help && hmmscan -h && clustalo --version && mmseqs version && cat /usr/local/share/mmseqs2-revision'
 
 networks:
   internal-net:

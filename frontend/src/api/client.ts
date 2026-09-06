@@ -34,6 +34,8 @@ export type Job = {
   counts?: JobCounts
   failure_reason?: string | null
   selection?: JobSelection
+  parent_job_id?: string | null
+  sequence_ids?: string[]
 }
 
 export type CdrScheme = 'imgt' | 'kabat' | 'chothia'
@@ -48,6 +50,12 @@ export type AlignmentSequence = {
   id?: string
   name: string
   seq: string
+  source?: {
+    animal: string
+    project: string
+    group: string
+    relative_path: string
+  }
   numbering?: Partial<Record<CdrScheme, Array<string | number | null>>>
   cdr?: Partial<Record<CdrScheme, CdrPositions>>
 }
@@ -159,6 +167,14 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, selection }),
+    })
+  },
+
+  async realign(jobId: string, sequenceIds: string[]): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/realign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sequence_ids: sequenceIds }),
     })
   },
 

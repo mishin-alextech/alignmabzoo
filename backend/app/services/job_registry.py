@@ -90,6 +90,8 @@ class JobRecord(BaseModel):
     finished_at: datetime | None = None
     counts: JobCounts = Field(default_factory=JobCounts)
     failure_reason: str | None = None
+    parent_job_id: str | None = None
+    sequence_ids: tuple[str, ...] = ()
 
 
 class _RegistryDocument(BaseModel):
@@ -150,6 +152,56 @@ class JobRegistry:
             except Exception:
                 # Пустой каталог не является опубликованной job; убрать его можно
                 # только пока он создан данным вызовом и ещё не попал в реестр.
+                try:
+                    job_directory.rmdir()
+                except OSError:
+                    pass
+                raise
+            return record
+
+    def create_derived(
+        self,
+        parent_job_id: str | UUID,
+        sequence_ids: Sequence[str],
+    ) -> JobRecord:
+        """Создаёт производную queued-job без доступа к исходному data-root."""
+
+        normalized_parent = self._normalize_job_id(parent_job_id)
+        normalized_ids = tuple(dict.fromkeys(sequence_ids))
+        if not normalized_ids:
+            raise JobRegistryError("Для повторного выравнивания нужно оставить хотя бы одну последовательность.")
+        if not all(isinstance(item, str) and item.startswith("seq_") for item in normalized_ids):
+            raise JobRegistryError("Список последовательностей имеет недопустимый формат.")
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            _, parent = self._find_record(document, normalized_parent)
+            if parent.status not in TERMINAL_STATUSES:
+                raise JobRegistryError("Повторное выравнивание доступно только для завершённой job.")
+            job_id = str(uuid4())
+            job_directory = self._job_directory(job_id)
+            try:
+                job_directory.mkdir(mode=0o750)
+            except OSError as error:
+                raise JobRegistryError("Не удалось создать каталог производной job.") from error
+            now = _utc_now()
+            record = JobRecord(
+                id=job_id,
+                name=self._derived_name(parent.name),
+                selection=JobSelection.model_validate({
+                    "parent_job_id": normalized_parent,
+                    "sequence_ids": list(normalized_ids),
+                }),
+                status=JobStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+                parent_job_id=normalized_parent,
+                sequence_ids=normalized_ids,
+            )
+            document.jobs.append(record)
+            try:
+                self._write_document(document)
+            except Exception:
                 try:
                     job_directory.rmdir()
                 except OSError:
@@ -382,6 +434,12 @@ class JobRegistry:
         if len(name) > 200:
             raise JobRegistryError("Название job не должно превышать 200 символов.")
         return name
+
+    @staticmethod
+    def _derived_name(parent_name: str) -> str:
+        """Формирует короткое русскоязычное имя производной job."""
+
+        return f"{parent_name} — повторное выравнивание"[:200]
 
     @staticmethod
     def _validate_selection(

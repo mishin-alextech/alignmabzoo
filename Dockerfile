@@ -11,11 +11,41 @@ COPY frontend/ ./
 RUN npm run build
 
 
+FROM python:3.12-slim-bookworm AS mmseqs-builder
+
+ARG MMSEQS_REPOSITORY=https://github.com/soedinglab/MMseqs2.git
+ARG MMSEQS_GIT_REF=f71d0a6
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        cmake \
+        g++ \
+        git \
+        make \
+        zlib1g-dev \
+        libbz2-dev \
+    && mkdir mmseqs2 \
+    && cd mmseqs2 \
+    && git init \
+    && git remote add origin "$MMSEQS_REPOSITORY" \
+    && git fetch --depth 1 origin "$MMSEQS_GIT_REF" \
+    && git checkout --detach FETCH_HEAD \
+    && git rev-parse HEAD > /build/mmseqs2-revision \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/mmseqs2 \
+    && cmake --build build --parallel 2 \
+    && cmake --install build \
+    && rm -rf /var/lib/apt/lists/* /build/mmseqs2/.git
+
+
 FROM python:3.12-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/opt/mmseqs2/bin:$PATH
 
 WORKDIR /app
 
@@ -24,7 +54,12 @@ RUN apt-get update \
         ca-certificates \
         clustalo \
         hmmer \
+        libgomp1 \
+        libbz2-1.0 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=mmseqs-builder /opt/mmseqs2/ /opt/mmseqs2/
+COPY --from=mmseqs-builder /build/mmseqs2-revision /usr/local/share/mmseqs2-revision
 
 # Backend — устанавливаемый Python-пакет с ASGI-приложением app.main:app.
 COPY backend/ /build/backend/
@@ -42,7 +77,9 @@ RUN anarci_site="$(python -c 'import site; print(site.getsitepackages()[0])')" \
     && command -v ANARCI \
     && command -v hmmscan \
     && command -v clustalo \
+    && command -v mmseqs \
     && ANARCI --help >/dev/null \
+    && mmseqs version \
     && rm -rf /tmp/anarci
 
 COPY backend/ /app/backend/

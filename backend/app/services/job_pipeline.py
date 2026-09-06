@@ -172,7 +172,13 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
             if named.diagnostic:
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
             sequence_id = _sequence_id(relative, sequence, result.nucleotide_sequence)
-            parsed_records.append(AlignmentInput(sequence_id, sequence_name, sequence, named.group, selected_group.animal_code))
+            source = {
+                "animal": selected_group.animal_code,
+                "project": selected_group.project_name,
+                "group": selected_group.group_name,
+                "relative_path": relative,
+            }
+            parsed_records.append(AlignmentInput(sequence_id, sequence_name, sequence, named.group, selected_group.animal_code, source))
             parsed_paths[sequence_id] = relative
             if result.nucleotide_sequence is not None:
                 parsed_nucleotides[sequence_id] = result.nucleotide_sequence
@@ -186,6 +192,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     "project": selected_group.project_name,
                     "group": selected_group.group_name,
                     "chain_group": named.group,
+                    "source": source,
                     "new_name": sequence_name,
                     "protein_sequence": sequence,
                     "nucleotide_sequence": result.nucleotide_sequence,
