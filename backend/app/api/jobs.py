@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path as ApiPath
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.discovery import DiscoveryService, get_discovery_service
 from app.services.job_pipeline import SelectionError, schedule_job, validate_selection
@@ -20,6 +20,12 @@ class JobCreateRequest(BaseModel):
 
     name: str
     selection: Any
+
+
+class JobDeleteRequest(BaseModel):
+    """Запрос пакетного удаления завершённых job."""
+
+    job_ids: list[str] = Field(min_length=1)
 
 
 RegistryDependency = Annotated[JobRegistry, Depends(get_job_registry)]
@@ -58,6 +64,17 @@ async def list_jobs(registry: RegistryDependency) -> tuple[JobRecord, ...]:
         return registry.list()
     except JobRegistryError as error:
         raise _registry_error(error) from error
+
+
+@router.delete("")
+async def delete_jobs(request: JobDeleteRequest, registry: RegistryDependency) -> dict[str, list[str]]:
+    """Удаляет только завершённые job и принадлежащие им каталоги результатов."""
+
+    try:
+        deleted_ids = registry.delete_terminal(request.job_ids)
+    except JobRegistryError as error:
+        raise _registry_error(error) from error
+    return {"deleted_ids": list(deleted_ids)}
 
 
 @router.get("/{job_id}", response_model=JobRecord)

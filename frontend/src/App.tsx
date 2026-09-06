@@ -59,6 +59,13 @@ function App() {
     ?? jobs.find((job) => activeStatuses.has(job.status))
   const selectedArchiveJob = jobs.find((job) => job.id === selectedArchiveJobId)
 
+  const removeDeletedJobs = useCallback((deletedIds: string[]) => {
+    const deletedSet = new Set(deletedIds)
+    setJobs((current) => current.filter((job) => !deletedSet.has(job.id)))
+    setActiveJobId((current) => (current && deletedSet.has(current) ? undefined : current))
+    if (selectedArchiveJobId && deletedSet.has(selectedArchiveJobId)) navigate('archive')
+  }, [navigate, selectedArchiveJobId])
+
   if (view === 'alignment' && selectedArchiveJobId) {
     return <FullscreenAlignmentViewer jobId={selectedArchiveJobId} groupName={selectedAlignmentGroupName} />
   }
@@ -85,6 +92,7 @@ function App() {
               jobs={jobs}
               selectedJob={selectedArchiveJob}
               onSelect={(job) => navigate('archive', job.id)}
+              onDeleted={removeDeletedJobs}
             />
           ) : (
             <>

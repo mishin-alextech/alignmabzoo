@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import RLock
-from typing import Final, Mapping
+from typing import Final, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, ValidationError
@@ -250,6 +251,43 @@ class JobRegistry:
                 self._write_document(document)
             return tuple(recovered)
 
+    def delete_terminal(self, job_ids: Sequence[str | UUID]) -> tuple[str, ...]:
+        """Удаляет завершённые job из реестра и их UUID-каталоги результатов."""
+
+        try:
+            normalized_ids = tuple(self._normalize_job_id(job_id) for job_id in job_ids)
+        except TypeError as error:
+            raise JobRegistryError("Для удаления необходимо передать список идентификаторов job.") from error
+        if not normalized_ids:
+            raise JobRegistryError("Не выбраны job для удаления.")
+        if len(normalized_ids) != len(set(normalized_ids)):
+            raise JobRegistryError("Список job для удаления содержит повторяющиеся идентификаторы.")
+
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            records = [self._find_record(document, job_id)[1] for job_id in normalized_ids]
+            nonterminal = next(
+                (record for record in records if record.status not in TERMINAL_STATUSES),
+                None,
+            )
+            if nonterminal is not None:
+                raise JobRegistryError(
+                    f"Удалять можно только завершённые job. Job «{nonterminal.name}» ещё выполняется."
+                )
+
+            directories = [self._safe_job_directory_for_deletion(job_id) for job_id in normalized_ids]
+            try:
+                for directory in directories:
+                    shutil.rmtree(directory)
+            except OSError as error:
+                raise JobRegistryError("Не удалось удалить каталог выбранной job.") from error
+
+            removed_ids = set(normalized_ids)
+            document.jobs = [record for record in document.jobs if record.id not in removed_ids]
+            self._write_document(document)
+            return normalized_ids
+
     def _ensure_jobs_root(self) -> None:
         """Создаёт только настроенный корень результатов, если он отсутствует."""
 
@@ -319,6 +357,21 @@ class JobRegistry:
 
         normalized_id = self._normalize_job_id(job_id)
         return self._jobs_root / normalized_id
+
+    def _safe_job_directory_for_deletion(self, job_id: str) -> Path:
+        """Проверяет UUID-каталог перед рекурсивным удалением."""
+
+        root = self._jobs_root.resolve()
+        if self._jobs_root.is_symlink() or not root.is_dir():
+            raise JobRegistryError("Каталог результатов job недоступен или небезопасен.")
+
+        directory = root / self._normalize_job_id(job_id)
+        if directory.is_symlink() or not directory.is_dir():
+            raise JobRegistryError("Каталог выбранной job недоступен или небезопасен.")
+        resolved_directory = directory.resolve()
+        if not resolved_directory.is_relative_to(root) or resolved_directory.parent != root:
+            raise JobRegistryError("Каталог выбранной job выходит за пределы каталога результатов.")
+        return directory
 
     @staticmethod
     def _validate_name(name: str) -> str:

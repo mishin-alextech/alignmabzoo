@@ -26,6 +26,8 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "K2C": "VKappa",
     "KC": "VKappa",
     "KC1": "VKappa",
+    "KC2": "VKappa",
+    "KCR": "VKappa",
     "CK": "VKappa",
     "kappa1": "VKappa",
     "Kappa": "VKappa",
@@ -39,6 +41,11 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "Lmbd": "VLambda",
     "LmbdC": "VLambda",
     "CLmbd": "VLambda",
+    "Clmbd": "VLambda",
+    "VLmbd": "VLambda",
+    "Vlambd": "VLambda",
+    "Lmbdc": "VLambda",
+    "LambdaC": "VLambda",
     "VLambda": "VLambda",
 }
 _CHAIN_ALIAS_RE: Final[re.Pattern[str]] = re.compile(
@@ -148,6 +155,10 @@ def _extract_clone(source_stem: str, project_base: str, animal_code: str) -> tup
                 return clone, None
 
     clone = _clone_after_animal_code(source_stem, animal_code)
+    if clone:
+        return clone, None
+
+    clone = _clone_before_animal_or_chain_marker(source_stem, animal_code)
     if clone:
         return clone, None
 
@@ -295,6 +306,40 @@ def _clone_after_animal_code(source_stem: str, animal_code: str) -> str | None:
         if clone:
             return clone
     return None
+
+
+def _clone_before_animal_or_chain_marker(
+    source_stem: str,
+    animal_code: str,
+) -> str | None:
+    """Возвращает правый идентификатор клона перед кодом животного или цепью.
+
+    Некоторые файлы содержат клон до отдельного кода животного либо перед
+    маркером цепи: ``INB90101_Ov_CLmbd`` или ``Rt4060_Lmbdc``. Функция
+    рассматривает только фрагменты до этих маркеров и выбирает самый правый
+    алфавитно-цифровой токен, содержащий и буквы, и цифры. Поэтому технический
+    ``cl10`` не будет выбран вместо расположенного правее ``INB90101``.
+    """
+
+    marker_starts: list[int] = []
+    if animal_code:
+        animal_marker = re.compile(
+            r"(?<![A-Za-z0-9])" + re.escape(animal_code) + r"(?![A-Za-z0-9])"
+        )
+        marker_starts.extend(match.start() for match in animal_marker.finditer(source_stem))
+
+    marker_starts.extend(match.start() for match in _CHAIN_ALIAS_RE.finditer(source_stem))
+    marker_starts.extend(match.start() for match in _LC_ALIAS_RE.finditer(source_stem))
+    if not marker_starts:
+        return None
+
+    candidates = [
+        match
+        for match in _ALPHANUMERIC_RUN_RE.finditer(source_stem)
+        if _is_clone_token(match.group(0))
+        and any(match.end() <= marker_start for marker_start in marker_starts)
+    ]
+    return candidates[-1].group(0) if candidates else None
 
 
 def _detect_group(source_stem: str) -> ChainGroup:

@@ -166,6 +166,15 @@ export const api = {
     return Array.isArray(response) ? response : response.jobs ?? []
   },
 
+  async deleteJobs(jobIds: string[]): Promise<string[]> {
+    const response = await request<{ deleted_ids?: string[] }>('/jobs', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_ids: jobIds }),
+    })
+    return response.deleted_ids ?? []
+  },
+
   job(jobId: string): Promise<Job> {
     return request<Job>(`/jobs/${encodeURIComponent(jobId)}`)
   },

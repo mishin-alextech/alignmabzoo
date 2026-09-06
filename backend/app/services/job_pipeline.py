@@ -130,7 +130,9 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         used_names: set[str] = set()
         for selected_group, source_path in source_files:
             relative = _report_path(selected_group, source_path)
-            if exclude_x_file and "_X_File" in source_path.name:
+            if exclude_x_file and any(
+                marker in source_path.name for marker in ("_X_File", "X-File", "XFile")
+            ):
                 reason = "Файл пропущен по настройке «Исключать X_File»."
                 report["skipped"].append({"path": relative, "reason": reason})
                 counts["files_skipped"] += 1
