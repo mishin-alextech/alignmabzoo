@@ -45,6 +45,7 @@ export type CdrPositions = {
 }
 
 export type AlignmentSequence = {
+  id?: string
   name: string
   seq: string
   numbering?: Partial<Record<CdrScheme, Array<string | number | null>>>

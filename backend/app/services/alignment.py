@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
@@ -29,13 +28,11 @@ ALIGNMENT_BATCHES: dict[str, tuple[str, ...]] = {
     "vkappa": ("VKappa",),
     "vlambda": ("VLambda",),
 }
-_SAFE_MSA_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,30}$")
-
-
 @dataclass(frozen=True, slots=True)
 class AlignmentInput:
     """Одна последовательность, готовая к добавлению во входной FASTA MSA."""
 
+    id: str
     name: str
     sequence: str
     group: str
@@ -99,7 +96,7 @@ def write_alignment_input(
     lines: list[str] = []
     for record in sort_alignment_inputs(records):
         _validate_fasta_record(record)
-        lines.extend((f">{msa_identifier(record.name)}", "".join(record.sequence.split()).upper()))
+        lines.extend((f">{record.id}", "".join(record.sequence.split()).upper()))
     output_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return output_path
 
@@ -119,20 +116,6 @@ def build_clustalo_command(input_path: str | Path, output_path: str | Path) -> t
         "1",
         "--force",
     )
-
-
-def msa_identifier(sequence_name: str) -> str:
-    """Возвращает устойчивый идентификатор для формата CLUSTAL.
-
-    Короткие безопасные имена остаются читаемыми. Для длинных имён и имён с
-    пробелами применяется короткий хеш: CLUSTAL не сокращает его, а viewer
-    далее восстанавливает исходное имя из ``AlignmentInput``.
-    """
-
-    if _SAFE_MSA_IDENTIFIER.fullmatch(sequence_name):
-        return sequence_name
-    digest = hashlib.sha256(sequence_name.encode("utf-8")).hexdigest()[:20]
-    return f"seq_{digest}"
 
 
 def run_clustalo_batches(
@@ -270,10 +253,10 @@ def build_alignment_document(
 
     groups: dict[str, list[dict[str, object]]] = {group: [] for group in CHAIN_GROUP_ORDER}
     for record in sort_alignment_inputs(records):
-        aligned = aligned_sequences.get(record.name) or aligned_sequences.get(msa_identifier(record.name))
+        aligned = aligned_sequences.get(record.id)
         if aligned is None:
             raise ValueError(f"В Clustal-выравнивании отсутствует последовательность {record.name}")
-        per_scheme = numberings.get(record.name, {})
+        per_scheme = numberings.get(record.id, {})
         numbering_json: dict[str, list[str | None]] = {}
         cdr_json: dict[str, dict[str, list[int]]] = {}
         for scheme in CHAIN_SCHEMES:
@@ -290,6 +273,7 @@ def build_alignment_document(
         group = record.group if record.group in groups else "Other"
         groups[group].append(
             {
+                "id": record.id,
                 "name": record.name,
                 "seq": aligned,
                 "numbering": numbering_json,
@@ -365,7 +349,7 @@ def _record_named_in_command_output(
     matches = [
         record
         for record in records
-        if _contains_identifier(diagnostic, record.name) or _contains_identifier(diagnostic, msa_identifier(record.name))
+        if _contains_identifier(diagnostic, record.id)
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -390,7 +374,7 @@ def _verify_clustalo_output(
     missing = [
         record
         for record in records
-        if record.name not in aligned and msa_identifier(record.name) not in aligned
+        if record.id not in aligned
     ]
     if not missing:
         return None, None

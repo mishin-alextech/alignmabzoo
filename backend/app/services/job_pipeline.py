@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -170,12 +171,14 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_log(job_directory, f"Переименование {relative}: {sequence_name}.")
             if named.diagnostic:
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
-            parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code))
-            parsed_paths[sequence_name] = relative
+            sequence_id = _sequence_id(relative, sequence, result.nucleotide_sequence)
+            parsed_records.append(AlignmentInput(sequence_id, sequence_name, sequence, named.group, selected_group.animal_code))
+            parsed_paths[sequence_id] = relative
             if result.nucleotide_sequence is not None:
-                parsed_nucleotides[sequence_name] = result.nucleotide_sequence
+                parsed_nucleotides[sequence_id] = result.nucleotide_sequence
             manifest_records.append(
                 {
+                    "id": sequence_id,
                     "path": relative,
                     "original_name": named.source_stem,
                     "source_filename": result.filename,
@@ -188,17 +191,17 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     "nucleotide_sequence": result.nucleotide_sequence,
                 }
             )
-            report["processed"].append({"path": relative, "name": sequence_name})
+            report["processed"].append({"path": relative, "name": sequence_name, "id": sequence_id})
             counts["files_processed"] += 1
-        _write_parsed_fasta(job_directory, parsed_records, parsed_paths)
-        _write_parsed_nucleotide_fasta(job_directory, parsed_nucleotides, parsed_paths)
+        _write_parsed_fasta(job_directory, parsed_records)
+        _write_parsed_nucleotide_fasta(job_directory, parsed_nucleotides)
         _write_named_fasta(job_directory, parsed_records)
         _write_sequence_manifest(job_directory, manifest_records)
         counts["sequences"] = len(parsed_records)
-        numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
+        numberings: dict[str, dict[str, object]] = {item.id: {} for item in parsed_records}
         if parsed_records:
             anarci_results = run_anarci_for_records(
-                records=tuple((item.name, item.sequence, item.group) for item in parsed_records),
+                records=tuple((item.id, item.sequence, item.group) for item in parsed_records),
                 selected_animals=selected_animals,
                 job_directory=job_directory,
                 jobs_root=registry.jobs_root,
@@ -208,9 +211,9 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 if scheme_result.succeeded:
                     parsed_by_name = parse_anarci_csv_records(scheme_result.output_path)
                     for item in (item for item in parsed_records if _anarci_batch_name(item.group) == scheme_result.batch_name):
-                        parsed = parsed_by_name.get(item.name)
+                        parsed = parsed_by_name.get(item.id)
                         if parsed is not None and parsed.residues:
-                            numberings[item.name][scheme_result.scheme] = parsed
+                            numberings[item.id][scheme_result.scheme] = parsed
                         elif parsed is not None:
                             reason = parsed.warning or "Строка последовательности CSV ANARCI не содержит распознаваемых позиций нумерации."
                             report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
@@ -233,7 +236,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     reason = f"Не прошедшие Clustal Omega: {exclusion.reason}"
                     report["clustalo_exclusions"].append(
                         {
-                            "path": parsed_paths.get(exclusion.record.name, exclusion.record.name),
+                            "path": parsed_paths.get(exclusion.record.id, exclusion.record.name),
                             "reason": reason,
                         }
                     )
@@ -297,6 +300,23 @@ def _unique_name(value: str, used: set[str]) -> str:
     return candidate
 
 
+def _sequence_id(path: str, protein: str, nucleotide: str | None) -> str:
+    """Создаёт стабильный безопасный ID для одной исходной записи."""
+
+    identity = json.dumps(
+        {
+            "schema": "sequence-id-v1",
+            "path": path,
+            "protein": protein,
+            "nucleotide": nucleotide or "",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"seq_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+
 def _normalize_protein_sequence(sequence: str) -> str | None:
     """Удаляет пробелы и отклоняет символы, недопустимые во входном FASTA."""
 
@@ -318,32 +338,31 @@ def _anarci_batch_name(group: str) -> str:
     return "other"
 
 
-def _write_parsed_fasta(directory: Path, records: list[AlignmentInput], paths: Mapping[str, str]) -> None:
-    """Записывает извлечённые цепи с исходным путём проекта и группы в FASTA-заголовке."""
+def _write_parsed_fasta(directory: Path, records: list[AlignmentInput]) -> None:
+    """Записывает извлечённые белковые цепи со стабильными FASTA-ID."""
 
     lines: list[str] = []
     for item in records:
-        lines.extend((f">{paths[item.name]}", item.sequence))
+        lines.extend((f">{item.id}", item.sequence))
     job_child_path(directory, "parsed_chains.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _write_named_fasta(directory: Path, records: list[AlignmentInput]) -> None:
     lines: list[str] = []
     for item in records:
-        lines.extend((f">{item.name}", item.sequence))
+        lines.extend((f">{item.id}", item.sequence))
     job_child_path(directory, "chains_named.fasta").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _write_parsed_nucleotide_fasta(
     directory: Path,
     sequences: Mapping[str, str],
-    paths: Mapping[str, str],
 ) -> None:
-    """Записывает нуклеотиды выбранных feature с теми же исходными путями."""
+    """Записывает нуклеотиды выбранных feature со стабильными FASTA-ID."""
 
     lines: list[str] = []
     for sequence_name, sequence in sequences.items():
-        lines.extend((f">{paths[sequence_name]}", sequence))
+        lines.extend((f">{sequence_name}", sequence))
     job_child_path(directory, "parsed_chains_nucleotide.txt").write_text(
         "\n".join(lines) + ("\n" if lines else ""),
         encoding="utf-8",
