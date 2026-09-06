@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -169,15 +168,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_log(job_directory, f"Переименование {relative}: {sequence_name}.")
             if named.diagnostic:
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
-            relative_source = source_path.relative_to(selected_group.directory).as_posix()
-            source = {
-                "animal": selected_group.animal_code,
-                "project": selected_group.project_name,
-                "group": selected_group.group_name,
-                "relative_path": relative_source,
-            }
-            sequence_id = _sequence_id(source)
-            parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code, sequence_id, source))
+            parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code))
             parsed_paths[sequence_name] = relative
             report["processed"].append({"path": relative, "name": sequence_name})
             counts["files_processed"] += 1
@@ -283,13 +274,6 @@ def _unique_name(value: str, used: set[str]) -> str:
         index += 1
     used.add(candidate)
     return candidate
-
-
-def _sequence_id(source: Mapping[str, str]) -> str:
-    """Возвращает стабильный ID исходной последовательности в пределах job."""
-
-    identity = "\x1f".join(source[key] for key in ("animal", "project", "group", "relative_path"))
-    return f"seq:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 
 def _normalize_protein_sequence(sequence: str) -> str | None:

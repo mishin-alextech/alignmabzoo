@@ -45,15 +45,8 @@ export type CdrPositions = {
 }
 
 export type AlignmentSequence = {
-  id?: string
   name: string
   seq: string
-  source?: {
-    animal: string
-    project: string
-    group: string
-    relative_path: string
-  }
   numbering?: Partial<Record<CdrScheme, Array<string | number | null>>>
   cdr?: Partial<Record<CdrScheme, CdrPositions>>
 }
