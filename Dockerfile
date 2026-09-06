@@ -14,7 +14,7 @@ RUN npm run build
 FROM python:3.12-slim-bookworm AS mmseqs-builder
 
 ARG MMSEQS_REPOSITORY=https://github.com/soedinglab/MMseqs2.git
-ARG MMSEQS_GIT_REF=f71d0a6
+ARG MMSEQS_GIT_REF=master
 
 WORKDIR /build
 
