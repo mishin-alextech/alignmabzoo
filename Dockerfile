@@ -18,17 +18,22 @@ ARG MMSEQS_GIT_REF=master
 
 WORKDIR /build
 
+ENV PATH=/root/.cargo/bin:$PATH
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
         cmake \
+        curl \
         g++ \
         git \
-        cargo \
         make \
-        rustc \
         zlib1g-dev \
         libbz2-dev \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain stable \
+    && rustc --version \
+    && cargo --version \
     && mkdir mmseqs2 \
     && cd mmseqs2 \
     && git init \
