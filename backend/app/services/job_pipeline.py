@@ -127,6 +127,8 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         _append_log(job_directory, f"Найдено входных файлов: {len(source_files)}.")
         parsed_records: list[AlignmentInput] = []
         parsed_paths: dict[str, str] = {}
+        parsed_nucleotides: dict[str, str] = {}
+        manifest_records: list[dict[str, object]] = []
         used_names: set[str] = set()
         for selected_group, source_path in source_files:
             relative = _report_path(selected_group, source_path)
@@ -170,10 +172,28 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
             parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code))
             parsed_paths[sequence_name] = relative
+            if result.nucleotide_sequence is not None:
+                parsed_nucleotides[sequence_name] = result.nucleotide_sequence
+            manifest_records.append(
+                {
+                    "path": relative,
+                    "original_name": named.source_stem,
+                    "source_filename": result.filename,
+                    "animal": selected_group.animal_code,
+                    "project": selected_group.project_name,
+                    "group": selected_group.group_name,
+                    "chain_group": named.group,
+                    "new_name": sequence_name,
+                    "protein_sequence": sequence,
+                    "nucleotide_sequence": result.nucleotide_sequence,
+                }
+            )
             report["processed"].append({"path": relative, "name": sequence_name})
             counts["files_processed"] += 1
         _write_parsed_fasta(job_directory, parsed_records, parsed_paths)
+        _write_parsed_nucleotide_fasta(job_directory, parsed_nucleotides, parsed_paths)
         _write_named_fasta(job_directory, parsed_records)
+        _write_sequence_manifest(job_directory, manifest_records)
         counts["sequences"] = len(parsed_records)
         numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
         if parsed_records:
@@ -264,7 +284,8 @@ def _discover_files(groups: Iterable[SelectedGroup]) -> Iterable[tuple[SelectedG
 
 
 def _report_path(selected: SelectedGroup, source: Path) -> str:
-    return f"{selected.project_name}/{selected.group_name}/{source.name}"
+    relative = source.relative_to(selected.directory).as_posix()
+    return f"{selected.project_name}/{selected.group_name}/{relative}"
 
 
 def _unique_name(value: str, used: set[str]) -> str:
@@ -311,6 +332,32 @@ def _write_named_fasta(directory: Path, records: list[AlignmentInput]) -> None:
     for item in records:
         lines.extend((f">{item.name}", item.sequence))
     job_child_path(directory, "chains_named.fasta").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def _write_parsed_nucleotide_fasta(
+    directory: Path,
+    sequences: Mapping[str, str],
+    paths: Mapping[str, str],
+) -> None:
+    """Записывает нуклеотиды выбранных feature с теми же исходными путями."""
+
+    lines: list[str] = []
+    for sequence_name, sequence in sequences.items():
+        lines.extend((f">{paths[sequence_name]}", sequence))
+    job_child_path(directory, "parsed_chains_nucleotide.txt").write_text(
+        "\n".join(lines) + ("\n" if lines else ""),
+        encoding="utf-8",
+    )
+
+
+def _write_sequence_manifest(directory: Path, records: list[Mapping[str, object]]) -> None:
+    """Фиксирует связь исходного пути, имён и белково-нуклеотидной пары."""
+
+    document = {"sequences": records}
+    job_child_path(directory, "sequence_manifest.json").write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _append_log(directory: Path, message: str) -> None:

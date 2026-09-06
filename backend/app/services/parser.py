@@ -16,15 +16,25 @@ import autosnapgene
 
 MIN_PROTEIN_LENGTH = 80
 SUPPORTED_SUFFIXES = frozenset({".dna", ".gb", ".genbank"})
+NUCLEOTIDE_ALPHABET = frozenset("ACGTRYSWKMBDHVN")
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedCandidate:
+    """Белок и нуклеотиды одной исходной feature."""
+
+    protein: str
+    nucleotide: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class ParseResult:
-    """Результат разбора одного входного файла без побочных действий."""
+    """Результат разбора одного входного файла без записи артефактов."""
 
     source_path: Path
     filename: str
     sequence: str | None = None
+    nucleotide_sequence: str | None = None
     error: str | None = None
 
     @property
@@ -35,7 +45,7 @@ class ParseResult:
 
 
 def parse_sequence_file(path: str | Path) -> ParseResult:
-    """Разбирает файл и возвращает самую длинную пригодную белковую цепь.
+    """Разбирает файл и возвращает белок с нуклеотидами выбранной feature.
 
     Ошибки входного файла преобразуются в русскоязычную диагностику: исключения
     намеренно не передаются вызывающему коду, чтобы один файл не прерывал job.
@@ -55,16 +65,21 @@ def parse_sequence_file(path: str | Path) -> ParseResult:
             candidates = _parse_snapgene(source_path)
         else:
             candidates = _parse_genbank(source_path)
-        sequence = _longest_protein(candidates)
+        candidate = _longest_protein(candidates)
     except Exception as error:
         return _failure(source_path, f"Не удалось разобрать файл: {_error_details(error)}")
 
-    if sequence is None:
+    if candidate is None:
         return _failure(
             source_path,
             f"В файле {filename} не найдена белковая последовательность длиной не менее {MIN_PROTEIN_LENGTH} а.к.",
         )
-    return ParseResult(source_path=source_path, filename=filename, sequence=sequence)
+    return ParseResult(
+        source_path=source_path,
+        filename=filename,
+        sequence=candidate.protein,
+        nucleotide_sequence=candidate.nucleotide,
+    )
 
 
 def _failure(source_path: Path, reason: str) -> ParseResult:
@@ -73,7 +88,7 @@ def _failure(source_path: Path, reason: str) -> ParseResult:
     return ParseResult(source_path=source_path, filename=source_path.name, error=reason)
 
 
-def _parse_genbank(path: Path) -> Iterable[str]:
+def _parse_genbank(path: Path) -> Iterable[ParsedCandidate]:
     """Извлекает кандидаты из features всех записей GenBank."""
 
     try:
@@ -86,12 +101,10 @@ def _parse_genbank(path: Path) -> Iterable[str]:
     for record in records:
         for feature in record.features:
             translation = _translation_from_qualifier(feature)
-            if translation is not None:
-                yield translation
-                continue
-            protein = _translate_genbank_feature(feature, record.seq)
+            nucleotide = _extract_genbank_nucleotides(feature, record.seq)
+            protein = translation or _translate_nucleotides_for_candidate(nucleotide, feature)
             if protein is not None:
-                yield protein
+                yield ParsedCandidate(protein, nucleotide)
 
 
 def _parse_genbank_with_normalized_locus(path: Path) -> Iterable[Any]:
@@ -150,18 +163,16 @@ def _normalize_locus_line(line: str) -> str | None:
     return f"LOCUS       {normalized_name} {length} {unit} {remainder.strip()}{line_ending or ''}"
 
 
-def _parse_snapgene(path: Path) -> Iterable[str]:
+def _parse_snapgene(path: Path) -> Iterable[ParsedCandidate]:
     """Извлекает кандидаты из всех features SnapGene."""
 
     snapgene_file = autosnapgene.SnapGene(str(path))
     for feature in snapgene_file.features:
         translation = _translation_from_qualifier(feature)
-        if translation is not None:
-            yield translation
-            continue
-        protein = _translate_snapgene_feature(feature, snapgene_file.sequence)
+        nucleotide = _extract_snapgene_nucleotides(feature, snapgene_file.sequence)
+        protein = translation or _translate_nucleotides_for_candidate(nucleotide, feature)
         if protein is not None:
-            yield protein
+            yield ParsedCandidate(protein, nucleotide)
 
 
 def _translation_from_qualifier(feature: Any) -> str | None:
@@ -176,8 +187,8 @@ def _translation_from_qualifier(feature: Any) -> str | None:
     return _clean_protein(translation)
 
 
-def _translate_genbank_feature(feature: Any, record_sequence: Seq) -> str | None:
-    """Транслирует feature GenBank, доверяя Biopython orientation и compound location."""
+def _extract_genbank_nucleotides(feature: Any, record_sequence: Seq) -> str | None:
+    """Извлекает ровно нуклеотиды feature с учётом compound location."""
 
     location = getattr(feature, "location", None)
     if location is None:
@@ -186,11 +197,11 @@ def _translate_genbank_feature(feature: Any, record_sequence: Seq) -> str | None
         nucleotides = feature.extract(record_sequence)
     except Exception:
         return None
-    return _translate_nucleotides(nucleotides, _codon_start(feature))
+    return _clean_nucleotide(str(nucleotides))
 
 
-def _translate_snapgene_feature(feature: Any, full_sequence: str) -> str | None:
-    """Транслирует feature SnapGene с учётом сегментов, направления и codon_start."""
+def _extract_snapgene_nucleotides(feature: Any, full_sequence: str) -> str | None:
+    """Извлекает ровно сегменты SnapGene feature в кодирующем направлении."""
 
     try:
         nucleotides = "".join(
@@ -200,6 +211,14 @@ def _translate_snapgene_feature(feature: Any, full_sequence: str) -> str | None:
         return None
     if getattr(feature, "directionality", None) == "backward":
         nucleotides = str(Seq(nucleotides).reverse_complement())
+    return _clean_nucleotide(nucleotides)
+
+
+def _translate_nucleotides_for_candidate(nucleotides: str | None, feature: Any) -> str | None:
+    """Транслирует извлечённую feature только при отсутствии готового translation."""
+
+    if nucleotides is None:
+        return None
     return _translate_nucleotides(nucleotides, _codon_start(feature))
 
 
@@ -242,16 +261,25 @@ def _clean_protein(sequence: str) -> str | None:
     return cleaned
 
 
-def _longest_protein(candidates: Iterable[str | None]) -> str | None:
+def _longest_protein(candidates: Iterable[ParsedCandidate]) -> ParsedCandidate | None:
     """Выбирает ровно одну наиболее длинную последовательность допустимого размера."""
 
-    best: str | None = None
+    best: ParsedCandidate | None = None
     for candidate in candidates:
-        if candidate is None or len(candidate) < MIN_PROTEIN_LENGTH:
+        if len(candidate.protein) < MIN_PROTEIN_LENGTH:
             continue
-        if best is None or len(candidate) > len(best):
+        if best is None or len(candidate.protein) > len(best.protein):
             best = candidate
     return best
+
+
+def _clean_nucleotide(sequence: str) -> str | None:
+    """Нормализует только последовательность, извлечённую из feature."""
+
+    cleaned = "".join(sequence.split()).upper()
+    if not cleaned or not set(cleaned).issubset(NUCLEOTIDE_ALPHABET):
+        return None
+    return cleaned
 
 
 def _error_details(error: Exception) -> str:
