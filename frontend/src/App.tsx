@@ -2,6 +2,7 @@ import { Alert, Box, Button, Container, Stack, Typography } from '@mui/material'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Job } from './api/client'
 import { FullscreenAlignmentViewer } from './components/FullscreenAlignmentViewer'
+import { ClusteringPlaceholder } from './components/ClusteringPlaceholder'
 import { JobArchive } from './components/JobArchive'
 import { JobResults } from './components/JobResults'
 import { JobStatus } from './components/JobStatus'
@@ -68,6 +69,9 @@ function App() {
 
   if (view === 'alignment' && selectedArchiveJobId) {
     return <FullscreenAlignmentViewer jobId={selectedArchiveJobId} groupName={selectedAlignmentGroupName} />
+  }
+  if (view === 'clustering' && selectedArchiveJobId) {
+    return <ClusteringPlaceholder jobId={selectedArchiveJobId} />
   }
 
   return (

@@ -1,6 +1,8 @@
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, Paper, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
-import { useEffect, useMemo, useState } from 'react'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, IconButton, Paper, Stack, SvgIcon, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
+import { useEffect, useMemo, useReducer, useState } from 'react'
 import { ApiError, api, type AlignmentGroup, type AlignmentResponse, type AlignmentSequence, type CdrScheme } from '../api/client'
+import { calculateColumnStatistics, formatColumnStatistic } from './alignment/columnStatistics'
+import { createViewerState, orderedViewerGroups, viewerReducer, type ViewerGroup } from './alignment/viewerState'
 
 type Props = {
   jobId: string
@@ -80,7 +82,7 @@ function aminoAcidTooltip(sequence: AlignmentSequence, index: number): string {
   ].join('\n')
 }
 
-function sortedNonEmptyGroups(data: AlignmentResponse | undefined): AlignmentGroup[] {
+function sortedNonEmptyGroups(data: { groups: ViewerGroup[] }): ViewerGroup[] {
   const found = new Map((data?.groups ?? []).map((group) => [group.name, group]))
   const known = groupOrder.flatMap((name) => {
     const group = found.get(name)
@@ -100,10 +102,12 @@ function AlignmentGroupPanel({
   consensusThreshold,
   selectedSequence,
   onSelect,
+  onMove,
+  windowRows,
   fullScreen,
   onOpenInNewTab,
 }: {
-  group: AlignmentGroup
+  group: ViewerGroup
   scheme: CdrScheme
   showCdr: boolean
   showConsensus: boolean
@@ -111,10 +115,13 @@ function AlignmentGroupPanel({
   consensusThreshold: number
   selectedSequence: string | null
   onSelect: (sequenceName: string) => void
+  onMove: (sequenceId: string, offset: -1 | 1) => void
+  windowRows: 30 | 60 | 120
   fullScreen: boolean
   onOpenInNewTab?: () => void
 }) {
   const columns = useMemo(() => calculateConsensus(group, consensusThreshold), [group, consensusThreshold])
+  const statistics = useMemo(() => calculateColumnStatistics(group.sequences), [group.sequences])
   const schemeColor = schemes.find((item) => item.value === scheme)?.color ?? 'transparent'
 
   return (
@@ -126,14 +133,20 @@ function AlignmentGroupPanel({
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Последовательностей: {group.sequences.length}
       </Typography>
-      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: fullScreen ? 'calc(100vh - 250px)' : 360, overflow: 'auto', scrollbarGutter: 'stable both-edges' }}>
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: fullScreen ? `min(calc(100vh - 250px), ${windowRows * 1.65}em)` : `min(360px, ${windowRows * 1.65}em)`, overflow: 'auto', scrollbarGutter: 'stable both-edges' }}>
         <Box component="table" sx={{ borderCollapse: 'separate', borderSpacing: 0, minWidth: 'max-content', fontFamily: '"JetBrains Mono", Consolas, monospace', fontSize: fullScreen ? 13.5 : 13 }}>
           <Box component="tbody">
             {group.sequences.map((sequence, rowIndex) => {
               const cdr = cdrIndexes(sequence, scheme)
-              const isSelected = selectedSequence === sequence.name
+              const isSelected = selectedSequence === sequence.id
               return (
-                <Box component="tr" key={sequence.name} tabIndex={0} onClick={() => onSelect(sequence.name)} sx={{ cursor: 'pointer' }}>
+                <Box component="tr" key={sequence.id} tabIndex={0} onClick={() => onSelect(sequence.id)} onKeyDown={(event) => {
+                  if (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) return
+                  if (!event.ctrlKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                  event.preventDefault()
+                  onSelect(sequence.id)
+                  onMove(sequence.id, event.key === 'ArrowUp' ? -1 : 1)
+                }} sx={{ cursor: 'pointer' }}>
                   <Box component="th" scope="row" sx={{ position: 'sticky', left: 0, zIndex: 1, px: 1, py: 0.5, textAlign: 'left', bgcolor: isSelected ? 'primary.main' : 'background.paper', color: isSelected ? 'primary.contrastText' : 'text.primary', borderRight: 1, borderColor: 'divider', whiteSpace: 'nowrap' }}>
                     {sequence.name}
                   </Box>
@@ -155,6 +168,14 @@ function AlignmentGroupPanel({
                 </Box>
               )
             })}
+            <Box component="tr" aria-label="Частоты аминокислот">
+              <Box component="th" scope="row" sx={{ position: 'sticky', left: 0, zIndex: 1, px: 1, py: 0.5, textAlign: 'left', bgcolor: 'background.paper', borderRight: 1, borderColor: 'divider', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                Частота
+              </Box>
+              <Box component="td" sx={{ p: 0.5, whiteSpace: 'pre' }}>
+                {statistics.map((statistic, index) => <Box component="span" key={`statistic-${index}`} title={formatColumnStatistic(statistic)} sx={{ display: 'inline-block', minWidth: '0.74em', textAlign: 'center', color: 'text.secondary' }}>{statistic.residue ? `${statistic.percentage?.toFixed(0)}%` : ''}</Box>)}
+              </Box>
+            </Box>
           </Box>
         </Box>
       </Box>
@@ -163,37 +184,46 @@ function AlignmentGroupPanel({
 }
 
 export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props) {
-  const [data, setData] = useState<AlignmentResponse>()
+  const [viewer, dispatch] = useReducer(viewerReducer, jobId, createViewerState)
   const [error, setError] = useState<string>()
   const [scheme, setScheme] = useState<CdrScheme>('imgt')
   const [consensusThreshold, setConsensusThreshold] = useState(80)
   const [showConsensus, setShowConsensus] = useState(true)
   const [showCdr, setShowCdr] = useState(true)
   const [showZappo, setShowZappo] = useState(false)
-  const [selected, setSelected] = useState<{ groupName: string; sequenceName: string } | null>(null)
+  const [windowRows, setWindowRows] = useState<30 | 60 | 120>(30)
 
   useEffect(() => {
     let active = true
-    setData(undefined)
+    dispatch({ type: 'reset', jobId })
     setError(undefined)
     void api.alignments(jobId).then(
-      (response) => { if (active) setData(response) },
+      (response) => { if (active) dispatch({ type: 'loaded', jobId, alignment: response }) },
       (reason) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить выравнивание.') },
     )
     return () => { active = false }
   }, [jobId])
 
   const groups = useMemo(() => {
-    const nonEmptyGroups = sortedNonEmptyGroups(data)
+    const nonEmptyGroups = sortedNonEmptyGroups({ groups: orderedViewerGroups(viewer.present) })
     return groupName ? nonEmptyGroups.filter((group) => group.name === groupName) : nonEmptyGroups
-  }, [data, groupName])
+  }, [viewer.present, groupName])
   const openGroupInNewTab = (name: string) => {
     const query = new URLSearchParams({ view: 'alignment', job: jobId, group: name })
     window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
   }
 
+  const moveSelected = (offset: -1 | 1) => {
+    if (!viewer.selected) return
+    dispatch({ type: 'move', groupName: viewer.selected.groupName, sequenceId: viewer.selected.sequenceId, offset })
+  }
+
+  const arrowPath = (direction: 'back' | 'forward') => direction === 'back'
+    ? 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z'
+    : 'M4 11v2h12.17l-5.59 5.59L12 20l8-8-8-8-1.41 1.41L16.17 11H4z'
+
   if (error) return <Alert severity="warning">{error}</Alert>
-  if (!data) return <Box textAlign="center" py={3}><CircularProgress size={24} /></Box>
+  if (viewer.jobId !== jobId || !viewer.present) return <Box textAlign="center" py={3}><CircularProgress size={24} /></Box>
   if (groups.length === 0) return <Typography color="text.secondary">Выравнивания не найдены.</Typography>
 
   return (
@@ -232,7 +262,25 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
           {schemes.map((item) => <Button key={item.value} variant={scheme === item.value ? 'contained' : 'outlined'} onClick={() => setScheme(item.value)}>{item.label}</Button>)}
         </ButtonGroup>
       )}
-      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={selected?.groupName === group.name ? selected.sequenceName : null} onSelect={(sequenceName) => setSelected({ groupName: group.name, sequenceName })} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
+      <Paper variant="outlined" sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, flexWrap: 'wrap' }}>
+        <Typography variant="caption" fontWeight={700}>Окно строк</Typography>
+        <ToggleButtonGroup exclusive size="small" value={windowRows} aria-label="Размер окна строк" onChange={(_, value: 30 | 60 | 120 | null) => { if (value !== null) setWindowRows(value) }}>
+          {[30, 60, 120].map((value) => <ToggleButton key={value} value={value}>{value}</ToggleButton>)}
+        </ToggleButtonGroup>
+        <Button size="small" variant="outlined" onClick={() => viewer.selected && dispatch({ type: 'sortCdr3', groupName: viewer.selected.groupName, scheme, direction: 'ascending' })}>Сортировать CDR3</Button>
+        <Button size="small" variant="outlined" onClick={() => { window.location.href = `?view=clustering&job=${encodeURIComponent(jobId)}` }}>Кластеризовать</Button>
+        <Tooltip title="Повторное выравнивание появится позже">
+          <span><Button size="small" variant="outlined" disabled>Кластеризовать и выровнять заново</Button></span>
+        </Tooltip>
+        <Button size="small" variant="outlined" disabled>Исключить клон</Button>
+        <Tooltip title="Отменить">
+          <span><IconButton aria-label="Отменить" size="small" disabled={viewer.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><SvgIcon><path d={arrowPath('back')} /></SvgIcon></IconButton></span>
+        </Tooltip>
+        <Tooltip title="Повторить">
+          <span><IconButton aria-label="Повторить" size="small" disabled={viewer.future.length === 0} onClick={() => dispatch({ type: 'redo' })}><SvgIcon><path d={arrowPath('forward')} /></SvgIcon></IconButton></span>
+        </Tooltip>
+      </Paper>
+      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => dispatch({ type: 'move', groupName: group.name, sequenceId, offset })} windowRows={windowRows} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
     </Stack>
   )
 }

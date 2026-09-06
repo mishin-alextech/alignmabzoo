@@ -40,6 +40,8 @@ class AlignmentInput:
     sequence: str
     group: str
     animal_code: str
+    id: str
+    source: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,8 +292,10 @@ def build_alignment_document(
         group = record.group if record.group in groups else "Other"
         groups[group].append(
             {
+                "id": record.id,
                 "name": record.name,
                 "seq": aligned,
+                "source": dict(record.source),
                 "numbering": numbering_json,
                 "cdr": cdr_json,
             }
