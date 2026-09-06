@@ -35,13 +35,19 @@ _CHAIN_ALIASES: Final[dict[str, ChainGroup]] = {
     "LC": "VLambda",
     "LC1": "VLambda",
     "LC2": "VLambda",
+    "VL": "VLambda",
+    "Lmbd": "VLambda",
     "LmbdC": "VLambda",
+    "CLmbd": "VLambda",
     "VLambda": "VLambda",
 }
 _CHAIN_ALIAS_RE: Final[re.Pattern[str]] = re.compile(
     r"(?<![A-Za-z0-9])(" + "|".join(
         re.escape(alias) for alias in sorted(_CHAIN_ALIASES, key=len, reverse=True)
     ) + r")(?![A-Za-z0-9])"
+)
+_LC_ALIAS_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9])LC[A-Za-z0-9]*(?![A-Za-z0-9])"
 )
 
 
@@ -141,13 +147,14 @@ def _extract_clone(source_stem: str, project_base: str, animal_code: str) -> tup
             if clone:
                 return clone, None
 
-        clone = _fallback_project_clone(source_stem, project_base)
-        if clone:
-            return clone, None
-
     clone = _clone_after_animal_code(source_stem, animal_code)
     if clone:
         return clone, None
+
+    if project_base:
+        clone = _fallback_project_clone(source_stem, project_base)
+        if clone:
+            return clone, None
 
     return (
         source_stem,
@@ -159,18 +166,23 @@ def _extract_clone(source_stem: str, project_base: str, animal_code: str) -> tup
 def _token_after(value: str, position: int) -> str | None:
     """Возвращает ближайший буквенно-цифровой фрагмент после известного маркера."""
 
-    match = _ALPHANUMERIC_RUN_RE.search(value, position)
-    candidate = match.group(0) if match is not None else None
-    if _has_letter(candidate):
-        return candidate
-    if candidate is None or not candidate.isdigit() or match is None:
-        return None
+    runs = list(_ALPHANUMERIC_RUN_RE.finditer(value))
+    for index, match in enumerate(runs):
+        if match.start() < position:
+            continue
 
-    preceding_runs = list(_ALPHANUMERIC_RUN_RE.finditer(value, 0, match.start()))
-    for preceding in reversed(preceding_runs):
-        prefix = preceding.group(0)
-        if _has_letter(prefix):
-            return f"{prefix}{candidate}"
+        candidate = match.group(0)
+        if _is_clone_token(candidate):
+            return candidate
+
+        if not candidate.isdigit():
+            continue
+
+        for preceding in reversed(runs[:index]):
+            prefix = preceding.group(0)
+            combined = f"{prefix}{candidate}"
+            if _has_letter(prefix) and _is_clone_token(combined):
+                return combined
     return None
 
 
@@ -178,6 +190,16 @@ def _has_letter(candidate: str | None) -> bool:
     """Проверяет, что кандидат идентификатора клона содержит букву."""
 
     return candidate is not None and any(character.isalpha() for character in candidate)
+
+
+def _is_clone_token(candidate: str | None) -> bool:
+    """Проверяет, что кандидат клона содержит буквы и цифры."""
+
+    return (
+        candidate is not None
+        and _has_letter(candidate)
+        and any(character.isdigit() for character in candidate)
+    )
 
 
 def _clone_from_separator_flexible_project_name(
@@ -202,7 +224,7 @@ def _clone_from_separator_flexible_project_name(
     )
     match = marker.search(source_stem)
     candidate = match.group(1) if match is not None else None
-    return candidate if _has_letter(candidate) else None
+    return candidate if _is_clone_token(candidate) else None
 
 
 def _clone_from_project_token(source_stem: str, project_base: str) -> str | None:
@@ -220,7 +242,7 @@ def _clone_from_project_token(source_stem: str, project_base: str) -> str | None
     )
     match = marker.search(source_stem)
     candidate = match.group(1) if match is not None else None
-    return candidate if _has_letter(candidate) else None
+    return candidate if _is_clone_token(candidate) else None
 
 
 def _fallback_project_clone(source_stem: str, project_base: str) -> str | None:
@@ -236,7 +258,7 @@ def _fallback_project_clone(source_stem: str, project_base: str) -> str | None:
         return None
     for run in _ALPHANUMERIC_RUN_RE.finditer(source_stem):
         candidate = run.group(0)
-        if _has_letter(candidate) and _matching_prefix_characters(candidate, project_prefix) >= 2:
+        if _is_clone_token(candidate) and _matching_prefix_characters(candidate, project_prefix) >= 2:
             return candidate
     return None
 
@@ -261,13 +283,25 @@ def _clone_after_animal_code(source_stem: str, animal_code: str) -> str | None:
     if not animal_code:
         return None
     marker = re.compile(r"(?<![A-Za-z0-9])" + re.escape(animal_code) + r"(?![A-Za-z0-9])")
-    match = marker.search(source_stem)
-    return _token_after(source_stem, match.end()) if match is not None else None
+    for match in marker.finditer(source_stem):
+        if match.end() < len(source_stem) and source_stem[match.end()] == "_":
+            next_separator = source_stem.find("_", match.end() + 1)
+            segment_end = next_separator if next_separator >= 0 else len(source_stem)
+            segment = source_stem[match.end() + 1 : segment_end]
+            if _is_clone_token(segment):
+                return segment
+
+        clone = _token_after(source_stem, match.end())
+        if clone:
+            return clone
+    return None
 
 
 def _detect_group(source_stem: str) -> ChainGroup:
     """Определяет первую указанную в имени цепь с учётом регистра алиасов."""
 
+    if _LC_ALIAS_RE.search(source_stem) is not None:
+        return "VLambda"
     match = _CHAIN_ALIAS_RE.search(source_stem)
     return _CHAIN_ALIASES[match.group(1)] if match is not None else "Other"
 

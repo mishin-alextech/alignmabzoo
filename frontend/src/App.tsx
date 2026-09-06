@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Job } from './api/client'
 import { FullscreenAlignmentViewer } from './components/FullscreenAlignmentViewer'
 import { JobArchive } from './components/JobArchive'
+import { JobResults } from './components/JobResults'
 import { JobStatus } from './components/JobStatus'
 import { JobWizard } from './components/JobWizard'
 
@@ -17,6 +18,7 @@ function App() {
   const route = useMemo(() => new URLSearchParams(locationSearch), [locationSearch])
   const view = route.get('view')
   const selectedArchiveJobId = route.get('job') ?? undefined
+  const selectedAlignmentGroupName = route.get('group') ?? undefined
 
   const navigate = useCallback((nextView?: 'archive' | 'alignment', jobId?: string) => {
     const nextRoute = new URLSearchParams()
@@ -53,12 +55,12 @@ function App() {
     return () => { active = false }
   }, [])
 
-  const activeJob = jobs.find((job) => job.id === activeJobId && activeStatuses.has(job.status))
+  const currentJob = jobs.find((job) => job.id === activeJobId)
     ?? jobs.find((job) => activeStatuses.has(job.status))
   const selectedArchiveJob = jobs.find((job) => job.id === selectedArchiveJobId)
 
   if (view === 'alignment' && selectedArchiveJobId) {
-    return <FullscreenAlignmentViewer jobId={selectedArchiveJobId} />
+    return <FullscreenAlignmentViewer jobId={selectedArchiveJobId} groupName={selectedAlignmentGroupName} />
   }
 
   return (
@@ -87,7 +89,8 @@ function App() {
           ) : (
             <>
               <JobWizard onCreated={mergeJob} />
-              {activeJob && <JobStatus job={activeJob} onUpdate={mergeJob} />}
+              {currentJob && <JobStatus job={currentJob} onUpdate={mergeJob} />}
+              {currentJob && <JobResults jobId={currentJob.id} status={currentJob.status} />}
             </>
           )}
         </Stack>

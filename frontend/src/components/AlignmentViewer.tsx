@@ -1,10 +1,11 @@
-import { Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, Paper, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, Paper, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type AlignmentGroup, type AlignmentResponse, type AlignmentSequence, type CdrScheme } from '../api/client'
 
 type Props = {
   jobId: string
   fullScreen?: boolean
+  groupName?: string
 }
 
 type ConsensusColumn = {
@@ -100,6 +101,7 @@ function AlignmentGroupPanel({
   selectedSequence,
   onSelect,
   fullScreen,
+  onOpenInNewTab,
 }: {
   group: AlignmentGroup
   scheme: CdrScheme
@@ -110,13 +112,17 @@ function AlignmentGroupPanel({
   selectedSequence: string | null
   onSelect: (sequenceName: string) => void
   fullScreen: boolean
+  onOpenInNewTab?: () => void
 }) {
   const columns = useMemo(() => calculateConsensus(group, consensusThreshold), [group, consensusThreshold])
   const schemeColor = schemes.find((item) => item.value === scheme)?.color ?? 'transparent'
 
   return (
     <Paper variant="outlined" sx={{ p: { xs: 1, sm: 2 }, minWidth: 0 }}>
-      <Typography variant="h6">{group.name}</Typography>
+      <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
+        <Typography variant="h6">{group.name}</Typography>
+        {onOpenInNewTab && <Button size="small" variant="outlined" onClick={onOpenInNewTab}>Открыть в новой вкладке</Button>}
+      </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Последовательностей: {group.sequences.length}
       </Typography>
@@ -156,7 +162,7 @@ function AlignmentGroupPanel({
   )
 }
 
-export function AlignmentViewer({ jobId, fullScreen = false }: Props) {
+export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props) {
   const [data, setData] = useState<AlignmentResponse>()
   const [error, setError] = useState<string>()
   const [scheme, setScheme] = useState<CdrScheme>('imgt')
@@ -177,9 +183,13 @@ export function AlignmentViewer({ jobId, fullScreen = false }: Props) {
     return () => { active = false }
   }, [jobId])
 
-  const groups = useMemo(() => sortedNonEmptyGroups(data), [data])
-  const openInNewTab = () => {
-    window.open(`?view=alignment&job=${encodeURIComponent(jobId)}`, '_blank', 'noopener,noreferrer')
+  const groups = useMemo(() => {
+    const nonEmptyGroups = sortedNonEmptyGroups(data)
+    return groupName ? nonEmptyGroups.filter((group) => group.name === groupName) : nonEmptyGroups
+  }, [data, groupName])
+  const openGroupInNewTab = (name: string) => {
+    const query = new URLSearchParams({ view: 'alignment', job: jobId, group: name })
+    window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
   }
 
   if (error) return <Alert severity="warning">{error}</Alert>
@@ -190,7 +200,6 @@ export function AlignmentViewer({ jobId, fullScreen = false }: Props) {
     <Stack spacing={2} sx={fullScreen ? { minHeight: '100vh', p: { xs: 1, sm: 2 } } : undefined}>
       <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
         <Typography component="h3" variant={fullScreen ? 'h4' : 'h6'}>Выравнивание последовательностей</Typography>
-        {!fullScreen && <Button size="small" variant="outlined" onClick={openInNewTab}>Открыть в новой вкладке</Button>}
       </Box>
       {fullScreen ? (
         <Stack spacing={1}>
@@ -209,13 +218,21 @@ export function AlignmentViewer({ jobId, fullScreen = false }: Props) {
             <Checkbox checked={showZappo} size="small" inputProps={{ 'aria-label': 'Показывать цвета Zappo' }} onChange={(event) => setShowZappo(event.target.checked)} />
           </Paper>
           <Typography variant="body2" color="text.secondary">CDR имеют приоритет над консенсусом и цветами Zappo. Нажмите на строку, чтобы выделить последовательность.</Typography>
+          <Accordion variant="outlined" disableGutters>
+            <AccordionSummary expandIcon={<span aria-hidden="true">⌄</span>} aria-controls="additional-options-content" id="additional-options-header">
+              <Typography>Дополнительные параметры</Typography>
+            </AccordionSummary>
+            <AccordionDetails id="additional-options-content">
+              <Typography color="text.secondary">Параметры будут добавлены позже.</Typography>
+            </AccordionDetails>
+          </Accordion>
         </Stack>
       ) : (
         <ButtonGroup size="small" aria-label="Схема нумерации CDR">
           {schemes.map((item) => <Button key={item.value} variant={scheme === item.value ? 'contained' : 'outlined'} onClick={() => setScheme(item.value)}>{item.label}</Button>)}
         </ButtonGroup>
       )}
-      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={selected?.groupName === group.name ? selected.sequenceName : null} onSelect={(sequenceName) => setSelected({ groupName: group.name, sequenceName })} fullScreen={fullScreen} />)}
+      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={selected?.groupName === group.name ? selected.sequenceName : null} onSelect={(sequenceName) => setSelected({ groupName: group.name, sequenceName })} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
     </Stack>
   )
 }
