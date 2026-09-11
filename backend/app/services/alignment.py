@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -27,7 +28,10 @@ ALIGNMENT_BATCHES: dict[str, tuple[str, ...]] = {
     "vheavy": ("VHeavy", "VHH"),
     "vkappa": ("VKappa",),
     "vlambda": ("VLambda",),
+    "other": ("Other",),
 }
+
+
 @dataclass(frozen=True, slots=True)
 class AlignmentInput:
     """Одна последовательность, готовая к добавлению во входной FASTA MSA."""
@@ -48,12 +52,16 @@ class ClustaloRunResult:
     output_path: Path
     command_result: CommandResult | None
     error: str | None = None
+    generated_without_command: bool = False
 
     @property
     def succeeded(self) -> bool:
         """Выравнивание создано без ошибки внешней команды."""
 
-        return self.error is None and self.command_result is not None and self.command_result.succeeded
+        return self.error is None and (
+            self.generated_without_command
+            or self.command_result is not None and self.command_result.succeeded
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +86,38 @@ class ClustaloExclusion:
 def sort_alignment_inputs(records: Sequence[AlignmentInput]) -> list[AlignmentInput]:
     """Сортирует MSA в обязательном порядке групп и затем по имени файла."""
 
-    return sorted(records, key=lambda item: (_GROUP_PRIORITY.get(item.group, 3), item.name))
+    return sorted(
+        records,
+        key=lambda item: (
+            _GROUP_PRIORITY.get(item.group, _GROUP_PRIORITY["Other"]),
+            item.source.get("relative_path", "").replace("\\", "/").rsplit("/", 1)[-1] or item.name,
+            item.name,
+            item.id,
+        ),
+    )
+
+
+def msa_identifier(sequence_id: str) -> str:
+    """Кодирует длинный либо legacy ID в безопасный токен CLUSTAL."""
+
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,30}", sequence_id):
+        return sequence_id
+    return "seq_" + hashlib.sha256(sequence_id.encode("utf-8")).hexdigest()[:26]
+
+
+def validate_sequence_ids(records: Sequence[AlignmentInput]) -> None:
+    """Отклоняет неоднозначные ID до записи FASTA или построения словарей."""
+
+    seen: set[str] = set()
+    msa_seen: set[str] = set()
+    for record in records:
+        if not record.id or record.id in seen:
+            raise ValueError("Идентификатор последовательности пуст или повторяется в наборе.")
+        identifier = msa_identifier(record.id)
+        if identifier in msa_seen:
+            raise ValueError("Идентификаторы последовательностей совпадают после подготовки FASTA.")
+        seen.add(record.id)
+        msa_seen.add(identifier)
 
 
 def write_alignment_input(
@@ -90,6 +129,7 @@ def write_alignment_input(
 ) -> Path:
     """Создаёт входной FASTA одной группы выравнивания внутри job."""
 
+    validate_sequence_ids(records)
     job_path = validate_job_directory(job_directory, jobs_root)
     alignment_directory = job_child_path(job_path, "alignment")
     alignment_directory.mkdir(parents=True, exist_ok=True)
@@ -97,7 +137,7 @@ def write_alignment_input(
     lines: list[str] = []
     for record in sort_alignment_inputs(records):
         _validate_fasta_record(record)
-        lines.extend((f">{record.id}", "".join(record.sequence.split()).upper()))
+        lines.extend((f">{msa_identifier(record.id)}", "".join(record.sequence.split()).upper()))
     output_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return output_path
 
@@ -125,17 +165,21 @@ def run_clustalo_batches(
     job_directory: str | Path,
     jobs_root: str | Path,
 ) -> tuple[ClustaloBatchResult, ...]:
-    """Создаёт три независимых MSA: VHeavy с VHH, VKappa и VLambda.
+    """Создаёт независимые MSA: VHeavy с VHH, VKappa, VLambda и Other.
 
     Ошибка инструмента возвращается как данные, чтобы job-слой мог
     зафиксировать её в отчёте и логе. Функция не читает и не изменяет
     исходный data-root.
     """
 
+    validate_sequence_ids(records)
+    unknown = [record for record in records if record.group not in CHAIN_GROUP_ORDER]
+    if unknown:
+        raise ValueError("Набор MSA содержит неизвестный тип цепи.")
     job_path = validate_job_directory(job_directory, jobs_root)
     results: list[ClustaloBatchResult] = []
     for batch_name, source_groups in ALIGNMENT_BATCHES.items():
-        source_records = tuple(record for record in records if record.group in source_groups)
+        source_records = tuple(record for record in sort_alignment_inputs(records) if record.group in source_groups)
         if not source_records:
             continue
         output_path = job_child_path(job_path, "alignment", f"{batch_name}.aln")
@@ -163,6 +207,14 @@ def run_clustalo_batches(
                 jobs_root=jobs_root,
             )
             output_path.unlink(missing_ok=True)
+            if len(remaining) == 1:
+                record = remaining[0]
+                sequence = "".join(record.sequence.split()).upper()
+                identifier = msa_identifier(record.id)
+                blocks = [f"{identifier}  {sequence[offset:offset + 60]}\n" for offset in range(0, len(sequence), 60)]
+                output_path.write_text("CLUSTAL W multiple sequence alignment\n\n" + "\n".join(blocks), encoding="utf-8")
+                last_result = ClustaloRunResult(input_path, output_path, None, generated_without_command=True)
+                break
             if shutil.which("clustalo") is None:
                 last_result = ClustaloRunResult(
                     input_path=input_path,
@@ -252,9 +304,10 @@ def build_alignment_document(
     пустые CDR, а не некорректные координаты.
     """
 
+    validate_sequence_ids(records)
     groups: dict[str, list[dict[str, object]]] = {group: [] for group in CHAIN_GROUP_ORDER}
     for record in sort_alignment_inputs(records):
-        aligned = aligned_sequences.get(record.id)
+        aligned = aligned_sequences.get(msa_identifier(record.id))
         if aligned is None:
             raise ValueError(f"В Clustal-выравнивании отсутствует последовательность {record.name}")
         per_scheme = numberings.get(record.id, {})
@@ -351,7 +404,7 @@ def _record_named_in_command_output(
     matches = [
         record
         for record in records
-        if _contains_identifier(diagnostic, record.id)
+        if _contains_identifier(diagnostic, msa_identifier(record.id))
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -376,9 +429,18 @@ def _verify_clustalo_output(
     missing = [
         record
         for record in records
-        if record.id not in aligned
+        if msa_identifier(record.id) not in aligned
     ]
     if not missing:
+        expected = {msa_identifier(record.id) for record in records}
+        if set(aligned) != expected:
+            return "Clustal Omega вернул неизвестные идентификаторы последовательностей.", None
+        if len({len(sequence) for sequence in aligned.values()}) != 1:
+            return "Строки результата Clustal Omega имеют разную длину.", None
+        for record in records:
+            sequence = aligned[msa_identifier(record.id)].replace("-", "").replace(".", "").upper()
+            if sequence != "".join(record.sequence.split()).upper():
+                return f"Clustal Omega изменил остатки последовательности {record.name}.", record
         return None, None
     if len(missing) == 1:
         record = missing[0]

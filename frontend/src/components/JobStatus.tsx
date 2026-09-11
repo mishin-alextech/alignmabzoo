@@ -10,29 +10,51 @@ export function JobStatus({ job: initialJob, onUpdate }: Props) {
   const [job, setJob] = useState(initialJob)
   const [log, setLog] = useState('')
   const [error, setError] = useState<string>()
+  const [logError, setLogError] = useState<string>()
   const [isLogExpanded, setIsLogExpanded] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
   useEffect(() => setJob(initialJob), [initialJob])
+  useEffect(() => { setLog(''); setLogError(undefined); setError(undefined) }, [initialJob.id])
 
   useEffect(() => {
     let active = true
+    let loadingStatus = false
+    let loadingLog = false
     const refresh = async () => {
+      if (loadingStatus) return
+      loadingStatus = true
       try {
-        const [nextJob, nextLog] = await Promise.all([api.job(initialJob.id), api.log(initialJob.id)])
+        const nextJob = await api.job(initialJob.id)
         if (!active) return
         setJob(nextJob)
-        setLog(nextLog)
         setError(undefined)
         onUpdate(nextJob)
       } catch (reason) {
         if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось обновить статус job.')
+      } finally {
+        loadingStatus = false
+      }
+    }
+    const refreshLog = async () => {
+      if (loadingLog) return
+      loadingLog = true
+      try {
+        const nextLog = await api.log(initialJob.id)
+        if (active) { setLog(nextLog); setLogError(undefined) }
+      } catch (reason) {
+        if (active) setLogError(reason instanceof ApiError && reason.status === 404
+          ? 'Журнал этой job пока недоступен.'
+          : reason instanceof ApiError ? reason.message : 'Не удалось обновить журнал job.')
+      } finally {
+        loadingLog = false
       }
     }
     void refresh()
+    void refreshLog()
     if (terminalStatuses.has(initialJob.status)) return () => { active = false }
-    const timer = window.setInterval(() => { void refresh() }, POLL_INTERVAL_MS)
+    const timer = window.setInterval(() => { void refresh(); void refreshLog() }, POLL_INTERVAL_MS)
     return () => { active = false; window.clearInterval(timer) }
   }, [initialJob.id, initialJob.status, onUpdate])
 
@@ -70,6 +92,7 @@ export function JobStatus({ job: initialJob, onUpdate }: Props) {
         </Box>
         {job.failure_reason && <Alert severity="error">{job.failure_reason}</Alert>}
         {error && <Alert severity="warning">{error}</Alert>}
+        {logError && <Alert severity="info">{logError}</Alert>}
         <Typography color="text.secondary">
           Найдено файлов: {job.counts?.files_found ?? 0}; последовательностей: {job.counts?.sequences ?? 0}.
         </Typography>

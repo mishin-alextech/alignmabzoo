@@ -95,4 +95,5 @@ WORKDIR /app/backend
 
 EXPOSE 8000
 
-CMD ["python", "-m", "gunicorn", "app.main:app", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker"]
+# Реестр и семафор общие внутри одного процесса; вычисления идут в фоновых потоках.
+CMD ["python", "-m", "gunicorn", "app.main:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "uvicorn.workers.UvicornWorker"]

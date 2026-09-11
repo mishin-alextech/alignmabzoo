@@ -1,8 +1,9 @@
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, FormControl, IconButton, InputLabel, MenuItem, Paper, Select, Stack, SvgIcon, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
-import { useEffect, useMemo, useReducer, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ApiError, api, type AlignmentGroup, type AlignmentResponse, type AlignmentSequence, type CdrScheme } from '../api/client'
-import { formatResidueFrequency } from './alignment/columnStatistics'
+import { calculateColumnStatistics, formatResidueFrequency, type ColumnStatistics } from './alignment/columnStatistics'
 import { createViewerState, orderedViewerGroups, viewerReducer, type ViewerGroup, type ViewerSequence } from './alignment/viewerState'
+import { AlignmentExclusions } from './AlignmentExclusions'
 
 type Props = {
   jobId: string
@@ -70,17 +71,34 @@ export function calculateConsensus(group: AlignmentGroup, threshold: number): Co
   })
 }
 
-function aminoAcidTooltip(sequence: AlignmentSequence, sequences: AlignmentSequence[], index: number): string {
+function aminoAcidTooltip(sequence: AlignmentSequence, columns: ColumnStatistics, index: number, position: number): string {
   const residue = sequence.seq[index]?.toUpperCase() ?? ''
   if (!residue || residue === '-' || residue === '.') return 'Пропуск выравнивания'
-  const position = Array.from(sequence.seq.slice(0, index + 1)).filter((item) => item !== '-' && item !== '.').length
   return [
     `${aminoAcidNames[residue] ?? residue} (${position})`,
-    formatResidueFrequency(sequences, index, residue),
     `IMGT: ${sequence.numbering?.imgt?.[index] ?? '—'}`,
     `Kabat: ${sequence.numbering?.kabat?.[index] ?? '—'}`,
     `Chothia: ${sequence.numbering?.chothia?.[index] ?? '—'}`,
+    formatResidueFrequency(columns, index, residue),
   ].join('\n')
+}
+
+function downloadVisibleAlignment(group: ViewerGroup): void {
+  // Сохраняем фактический порядок и координаты отображаемой панели.
+  const names = group.sequences.map((row, index) => `${row.name.replace(/\s+/g, '_')}_${index + 1}`)
+  const padding = Math.max(...names.map((name) => name.length)) + 2
+  const lines = ['CLUSTAL W multiple sequence alignment', '']
+  const length = group.sequences[0]?.seq.length ?? 0
+  for (let offset = 0; offset < length; offset += 60) {
+    group.sequences.forEach((row, index) => lines.push(`${names[index].padEnd(padding)}${row.seq.slice(offset, offset + 60)}`))
+    lines.push('')
+  }
+  const url = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${group.name}-display.aln`
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function sortedNonEmptyGroups(data: { groups: ViewerGroup[] }): ViewerGroup[] {
@@ -119,6 +137,7 @@ function AlignmentGroupPanel({
   onToggleExclusion,
   fullScreen,
   onOpenInNewTab,
+  disabled,
 }: {
   group: ViewerGroup
   scheme: CdrScheme
@@ -133,14 +152,17 @@ function AlignmentGroupPanel({
   onToggleExclusion: (sequenceId: string) => void
   fullScreen: boolean
   onOpenInNewTab?: () => void
+  disabled: boolean
 }) {
   const columns = useMemo(() => calculateConsensus(group, consensusThreshold), [group, consensusThreshold])
+  const statistics = useMemo(() => calculateColumnStatistics(group.sequences), [group.sequences])
   const schemeColor = schemes.find((item) => item.value === scheme)?.color ?? 'transparent'
 
   return (
     <Paper variant="outlined" sx={{ p: { xs: 1, sm: 2 }, minWidth: 0 }}>
       <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
         <Typography variant="h6">{group.name}</Typography>
+        <Button size="small" onClick={() => downloadVisibleAlignment(group)}>Скачать отображаемое выравнивание</Button>
         {onOpenInNewTab && <Button size="small" variant="outlined" onClick={onOpenInNewTab}>Открыть в новой вкладке</Button>}
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
@@ -152,28 +174,30 @@ function AlignmentGroupPanel({
             {group.sequences.map((sequence, rowIndex) => {
               const cdr = cdrIndexes(sequence, scheme)
               const isSelected = selectedSequence === sequence.id
+              let position = 0
               return (
                 <Box component="tr" key={sequence.id} tabIndex={0} onClick={() => onSelect(sequence.id)} onKeyDown={(event) => {
                   if (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) return
-                  if (!event.ctrlKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                  if (disabled || !event.ctrlKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
                   event.preventDefault()
                   onSelect(sequence.id)
                   onMove(sequence.id, event.key === 'ArrowUp' ? -1 : 1)
                 }} sx={{ cursor: 'pointer' }}>
                   <Box component="th" scope="row" sx={{ position: 'sticky', left: 0, zIndex: 1, px: 1, py: 0.25, textAlign: 'left', bgcolor: isSelected ? 'primary.main' : 'background.paper', color: isSelected ? 'primary.contrastText' : 'text.primary', borderRight: 1, borderColor: 'divider', whiteSpace: 'nowrap' }}>
-                    <Checkbox checked={excludedIds.includes(sequence.id)} size="small" inputProps={{ 'aria-label': `Исключить ${sequence.name}` }} onClick={(event) => event.stopPropagation()} onChange={() => onToggleExclusion(sequence.id)} sx={{ p: 0, mr: 0.5, color: isSelected ? 'primary.contrastText' : undefined }} />
+                    <Checkbox disabled={disabled} checked={excludedIds.includes(sequence.id)} size="small" inputProps={{ 'aria-label': `Исключить ${sequence.name}` }} onClick={(event) => event.stopPropagation()} onChange={() => onToggleExclusion(sequence.id)} sx={{ p: 0, mr: 0.5, color: isSelected ? 'primary.contrastText' : undefined }} />
                     {sequence.name}
                   </Box>
                   <Box component="td" sx={{ p: 0.25, whiteSpace: 'pre', bgcolor: isSelected ? 'primary.main' : 'transparent' }}>
                     {Array.from(sequence.seq).map((residue, index) => {
                       const upperResidue = residue.toUpperCase()
+                      if (upperResidue !== '-' && upperResidue !== '.') position += 1
                       const background = showCdr && cdr.has(index)
                         ? schemeColor
                         : showConsensus && columns[index]?.matches[rowIndex]
                           ? '#fff59d'
                           : showZappo ? zappoColors[upperResidue] ?? 'transparent' : 'transparent'
                       return (
-                        <Box component="span" key={`${sequence.id}-${index}`} title={aminoAcidTooltip(sequence, group.sequences, index)} sx={{ display: 'inline-block', minWidth: '0.74em', textAlign: 'center', bgcolor: background, color: isSelected && background === 'transparent' ? 'primary.contrastText' : 'inherit' }}>
+                        <Box component="span" key={`${sequence.id}-${index}`} title={aminoAcidTooltip(sequence, statistics, index, position)} sx={{ display: 'inline-block', minWidth: '0.74em', textAlign: 'center', bgcolor: background, color: isSelected && background === 'transparent' ? 'primary.contrastText' : 'inherit' }}>
                           {residue}
                         </Box>
                       )
@@ -200,16 +224,25 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
   const [selectedSourceKey, setSelectedSourceKey] = useState('')
   const [realigning, setRealigning] = useState(false)
   const [realignError, setRealignError] = useState<string>()
+  const requestVersion = useRef(0)
+  const busy = useRef(false)
+  const currentJobId = useRef(jobId)
+  currentJobId.current = jobId
 
   useEffect(() => {
     let active = true
+    requestVersion.current += 1
+    busy.current = false
+    setRealigning(false)
+    setRealignError(undefined)
+    setSelectedSourceKey('')
     dispatch({ type: 'reset', jobId })
     setError(undefined)
     void api.alignments(jobId).then(
       (response) => { if (active) dispatch({ type: 'loaded', jobId, alignment: response }) },
       (reason) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить выравнивание.') },
     )
-    return () => { active = false }
+    return () => { active = false; requestVersion.current += 1; busy.current = false }
   }, [jobId])
 
   const groups = useMemo(() => {
@@ -217,15 +250,16 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     return groupName ? nonEmptyGroups.filter((group) => group.name === groupName) : nonEmptyGroups
   }, [viewer.present, groupName])
   const openGroupInNewTab = (name: string) => {
-    const query = new URLSearchParams({ view: 'alignment', job: jobId, group: name })
+    const query = new URLSearchParams({ view: 'alignment', job: viewer.present?.jobId ?? jobId, group: name })
     window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
   }
   const moveSelected = (offset: -1 | 1) => {
-    if (!viewer.selected) return
+    if (!viewer.selected || realigning) return
     dispatch({ type: 'move', groupName: viewer.selected.groupName, sequenceId: viewer.selected.sequenceId, offset })
   }
   const openClustering = () => {
-    window.location.href = `?view=clustering&job=${encodeURIComponent(jobId)}`
+    const targetJobId = viewer.present?.jobId ?? jobId
+    window.open(`?view=clustering&job=${encodeURIComponent(targetJobId)}`, '_blank', 'noopener,noreferrer')
   }
   const originalSequences = viewer.original?.groups.flatMap((group) => group.sequences) ?? []
   const presentIds = new Set(viewer.present?.includedIds ?? [])
@@ -244,7 +278,10 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
   const draftExcludedIds = [...viewer.draftExcludedIds].sort()
   const exclusionsChanged = draftExcludedIds.length !== baselineExcludedIds.length
     || draftExcludedIds.some((id, index) => id !== baselineExcludedIds[index])
-  const retainedIds = [...presentIds].filter((id) => !viewer.draftExcludedIds.includes(id))
+  const excluded = new Set(viewer.draftExcludedIds)
+  const retainedIds = originalSequences.filter((sequence) => !excluded.has(sequence.id)).map((sequence) => sequence.id)
+  const selectedSourceIds = originalSequences.filter((sequence) => sourceKey(sequence) === selectedSourceKey).map((sequence) => sequence.id)
+  const sourceExcluded = selectedSourceIds.length > 0 && selectedSourceIds.every((id) => excluded.has(id))
   const toggleSourceExclusion = (key: string) => {
     const ids = originalSequences.filter((sequence) => sourceKey(sequence) === key).map((sequence) => sequence.id)
     const shouldExclude = ids.some((id) => !viewer.draftExcludedIds.includes(id))
@@ -253,33 +290,44 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     dispatch({ type: 'setDraftExclusions', sequenceIds: [...next] })
   }
   const applyExclusions = async () => {
-    if (!viewer.present || !exclusionsChanged || retainedIds.length === 0 || realigning) return
+    if (!viewer.present || !exclusionsChanged || retainedIds.length === 0 || busy.current) return
+    busy.current = true
+    const version = ++requestVersion.current
+    const sourceJobId = jobId
+    const isCurrent = () => requestVersion.current === version && currentJobId.current === sourceJobId
     setRealigning(true)
     setRealignError(undefined)
     try {
-      const parentId = viewer.present.jobId || jobId
+      const parentId = retainedIds.every((id) => presentIds.has(id)) ? viewer.present.jobId : jobId
       const derivedJob = await api.realign(parentId, retainedIds)
+      if (!isCurrent()) return
       let status = derivedJob
       while (status.status === 'queued' || status.status === 'running') {
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        if (!isCurrent()) return
         status = await api.job(derivedJob.id)
+        if (!isCurrent()) return
       }
       if (status.status !== 'done' && status.status !== 'partial') {
         throw new ApiError(status.failure_reason || 'Повторное выравнивание завершилось ошибкой.')
       }
       const alignment = await api.alignments(derivedJob.id)
-      dispatch({ type: 'applyAlignment', jobId: derivedJob.id, alignment })
+      if (!isCurrent()) return
+      if (!alignment.groups?.some((group) => group.sequences.length > 0)) {
+        throw new ApiError('Повторное выравнивание пусто. Прежний результат сохранён.')
+      }
+      const warning = status.status === 'partial' ? 'Повторное выравнивание завершено частично. Проверьте отчёт текущего результата.' : undefined
+      dispatch({ type: 'applyAlignment', sourceJobId, jobId: derivedJob.id, alignment, warning })
     } catch (reason) {
-      setRealignError(reason instanceof ApiError ? reason.message : 'Не удалось применить исключения и выровнять последовательности.')
+      if (isCurrent()) setRealignError(reason instanceof ApiError ? reason.message : 'Не удалось применить исключения и выровнять последовательности.')
     } finally {
-      setRealigning(false)
+      if (isCurrent()) { busy.current = false; setRealigning(false) }
     }
   }
 
   if (error) return <Alert severity="warning">{error}</Alert>
   if (viewer.jobId !== jobId || !viewer.present) return <Box textAlign="center" py={3}><CircularProgress size={24} /></Box>
   if (groups.length === 0) return <Typography color="text.secondary">Выравнивания не найдены.</Typography>
-
   return (
     <Stack spacing={2} sx={fullScreen ? { minHeight: '100vh', p: { xs: 1, sm: 2 } } : undefined}>
       <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
@@ -316,6 +364,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
           {schemes.map((item) => <Button key={item.value} variant={scheme === item.value ? 'contained' : 'outlined'} onClick={() => setScheme(item.value)}>{item.label}</Button>)}
         </ButtonGroup>
       )}
+      <Box component="fieldset" disabled={realigning} sx={{ m: 0, p: 0, border: 0, minWidth: 0 }}>
       <Paper variant="outlined" sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, flexWrap: 'wrap' }}>
         <FormControl size="small" sx={{ minWidth: 240 }}>
           <InputLabel id="source-group-label">Исходная группа</InputLabel>
@@ -324,13 +373,14 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
             {sourceOptions.map(([key, sequence]) => <MenuItem key={key} value={key}>{sourceLabel(sequence)}</MenuItem>)}
           </Select>
         </FormControl>
-        {selectedSourceKey && <Button size="small" variant="outlined" onClick={() => toggleSourceExclusion(selectedSourceKey)}>Исключить группу</Button>}
+        {selectedSourceKey && <Button size="small" variant="outlined" onClick={() => toggleSourceExclusion(selectedSourceKey)}>{sourceExcluded ? 'Вернуть группу' : 'Исключить группу'}</Button>}
         <Button size="small" variant="outlined" disabled={!viewer.selected} onClick={() => viewer.selected && dispatch({ type: 'sortCdr3', groupName: viewer.selected.groupName, scheme, direction: 'ascending' })}>Сортировать CDR3</Button>
         <Button size="small" variant="outlined" onClick={openClustering}>Кластеризовать</Button>
         <Tooltip title="Повторное выравнивание появится позже">
           <span><Button size="small" variant="outlined" disabled>Кластеризовать и выровнять заново</Button></span>
         </Tooltip>
-        <Button size="small" variant="outlined" disabled>Исключить клон</Button>
+        <Button size="small" variant="outlined" disabled={!viewer.selected} onClick={() => viewer.selected && dispatch({ type: 'toggleDraftExclusion', sequenceId: viewer.selected.sequenceId })}>Исключить / вернуть клон</Button>
+        <Button size="small" disabled={viewer.draftExcludedIds.length === 0} onClick={() => dispatch({ type: 'setDraftExclusions', sequenceIds: [] })}>Вернуть все строки</Button>
         <Tooltip title="Отменить">
           <span><IconButton aria-label="Отменить" size="small" disabled={viewer.past.length === 0} onClick={() => dispatch({ type: 'undo' })}><SvgIcon><path d="M20 11H7.83l5.59-5.59L12 4l8 8-8 8-1.41-1.41L16.17 13H4v-2z" /></SvgIcon></IconButton></span>
         </Tooltip>
@@ -344,8 +394,23 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
         <Typography variant="body2" color="text.secondary">К исключению: {viewer.draftExcludedIds.length}</Typography>
         <Button size="small" variant="contained" disabled={!exclusionsChanged || retainedIds.length === 0 || realigning} onClick={() => void applyExclusions()}>{realigning ? 'Выполняется...' : 'Применить исключения и выровнять'}</Button>
       </Paper>
+      </Box>
       {realignError && <Alert severity="warning">{realignError}</Alert>}
-      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => dispatch({ type: 'move', groupName: group.name, sequenceId, offset })} excludedIds={viewer.draftExcludedIds} onToggleExclusion={(sequenceId) => dispatch({ type: 'toggleDraftExclusion', sequenceId })} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
+      {viewer.present.warning && <Alert severity="warning">{viewer.present.warning}</Alert>}
+      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => { if (!realigning) dispatch({ type: 'move', groupName: group.name, sequenceId, offset }) }} excludedIds={viewer.draftExcludedIds} onToggleExclusion={(sequenceId) => dispatch({ type: 'toggleDraftExclusion', sequenceId })} disabled={realigning} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
+      <Typography variant="body2" color="text.secondary">Файлы расчёта текущей версии (порядок до ручной перестановки строк):</Typography>
+      <Box display="flex" gap={1} flexWrap="wrap">
+        {([
+          ['vheavy.aln', ['VHeavy', 'VHH'], 'VHeavy и VHH'],
+          ['vkappa.aln', ['VKappa'], 'VKappa'],
+          ['vlambda.aln', ['VLambda'], 'VLambda'],
+          ['other.aln', ['Other'], 'Other'],
+        ] as const).filter(([, names]) => groups.some((group) => (names as readonly string[]).includes(group.name))).map(([filename, , label]) => (
+          <Button key={filename} component="a" href={api.alignmentDownloadUrl(viewer.present!.jobId, filename)} variant="outlined">Скачать {label}</Button>
+        ))}
+        <Button component="a" href={api.reportDownloadUrl(viewer.present.jobId)}>Скачать отчёт</Button>
+      </Box>
+      <AlignmentExclusions key={viewer.present.jobId} jobId={viewer.present.jobId} />
     </Stack>
   )
 }

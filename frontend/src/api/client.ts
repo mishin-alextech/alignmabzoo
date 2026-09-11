@@ -68,12 +68,27 @@ export type AlignmentGroup = {
 export type AlignmentResponse = { groups?: AlignmentGroup[] }
 export type BrowsePage = { items: string[]; nextOffset: number | null }
 
+export type ClusterScope = 'cdr3' | 'variable_domain'
+export type Cluster = {
+  id: string
+  representative_id: string
+  sequence_ids: string[]
+  chain_group: string
+  size: number
+}
+export type ClusterResult = {
+  clusters: Cluster[]
+  unclustered: Array<{ id: string; reason: string }>
+  order: string[]
+}
+
 export type ReportEntry = { path?: string; reason?: string }
 
 export type JobReport = {
   processed?: ReportEntry[]
   skipped?: ReportEntry[]
   clustalo_exclusions?: ReportEntry[]
+  user_exclusions?: ReportEntry[]
   errors?: ReportEntry[]
 }
 
@@ -178,6 +193,26 @@ export const api = {
     })
   },
 
+  async cluster(jobId: string, input: {
+    sequenceIds: string[]
+    scope: ClusterScope
+    numberingScheme?: CdrScheme
+    minSeqId: number
+    coverage: number
+  }): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/cluster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sequence_ids: input.sequenceIds,
+        scope: input.scope,
+        numbering_scheme: input.numberingScheme,
+        min_seq_id: input.minSeqId,
+        coverage: input.coverage,
+      }),
+    })
+  },
+
   async jobs(): Promise<Job[]> {
     const response = await request<{ jobs?: Job[] } | Job[]>('/jobs')
     return Array.isArray(response) ? response : response.jobs ?? []
@@ -227,11 +262,15 @@ export const api = {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/exclusions`)
   },
 
+  clusters(jobId: string): Promise<ClusterResult> {
+    return request<ClusterResult>(`/jobs/${encodeURIComponent(jobId)}/clusters`)
+  },
+
   report(jobId: string): Promise<JobReport> {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/report`)
   },
 
-  alignmentDownloadUrl(jobId: string, filename: 'vheavy.aln' | 'vkappa.aln' | 'vlambda.aln'): string {
+  alignmentDownloadUrl(jobId: string, filename: 'vheavy.aln' | 'vkappa.aln' | 'vlambda.aln' | 'other.aln'): string {
     return `/api/jobs/${encodeURIComponent(jobId)}/alignments/${encodeURIComponent(filename)}`
   },
 

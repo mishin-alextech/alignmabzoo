@@ -6,6 +6,7 @@ export type ViewerAlignment = Omit<AlignmentResponse, 'groups'> & { groups: View
 export type ViewerSelection = { groupName: string; sequenceId: string }
 export type ViewerSnapshot = {
   jobId: string
+  warning?: string
   alignment: ViewerAlignment
   order: Record<string, string[]>
   includedIds: string[]
@@ -28,9 +29,10 @@ export type ViewerAction =
   | { type: 'toggleDraftExclusion'; sequenceId: string }
   | { type: 'resetDraftExclusions' }
   | { type: 'setOrder'; groupName: string; sequenceIds: string[] }
+  | { type: 'setOrders'; orders: Record<string, string[]> }
   | { type: 'sortCdr3'; groupName: string; scheme: CdrScheme; direction: 'ascending' | 'descending' }
   | { type: 'move'; groupName: string; sequenceId: string; offset: -1 | 1 }
-  | { type: 'applyAlignment'; jobId: string; alignment: AlignmentResponse }
+  | { type: 'applyAlignment'; jobId: string; sourceJobId: string; alignment: AlignmentResponse; warning?: string }
   | { type: 'undo' }
   | { type: 'redo' }
 
@@ -135,6 +137,25 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       return viewerReducer(state, { type: 'setDraftExclusions', sequenceIds: state.draftExcludedIds.includes(action.sequenceId) ? state.draftExcludedIds.filter((id) => id !== action.sequenceId) : [...state.draftExcludedIds, action.sequenceId] })
     case 'resetDraftExclusions': return { ...state, draftExcludedIds: appliedExclusions(state, state.present) }
     case 'setOrder': return changeOrder(state, action.groupName, action.sequenceIds)
+    case 'setOrders': {
+      const present = state.present
+      if (!present) return state
+      const order = { ...present.order }
+      let changed = false
+      for (const [groupName, sequenceIds] of Object.entries(action.orders)) {
+        const current = order[groupName]
+        if (!current || current.length !== sequenceIds.length) return state
+        const allowed = new Set(current)
+        if (new Set(sequenceIds).size !== current.length || sequenceIds.some((id) => !allowed.has(id))) return state
+        if (current.some((id, index) => id !== sequenceIds[index])) {
+          order[groupName] = [...sequenceIds]
+          changed = true
+        }
+      }
+      return changed
+        ? { ...commitSnapshot(state, { ...present, order }), draftExcludedIds: state.draftExcludedIds }
+        : state
+    }
     case 'sortCdr3': {
       const group = orderedViewerGroups(state.present).find((item) => item.name === action.groupName)
       if (!group) return state
@@ -155,9 +176,10 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       return changeOrder(state, action.groupName, order)
     }
     case 'applyAlignment': {
-      if (!state.original || !state.present) return state
+      if (action.sourceJobId !== state.jobId || !state.original || !state.present) return state
       const alignment = normalizeViewerAlignment(action.alignment)
-      return commitSnapshot(state, createSnapshot(action.jobId, alignment, state.present))
+      if (!alignment.groups.some((group) => group.sequences.length > 0)) return state
+      return commitSnapshot(state, { ...createSnapshot(action.jobId, alignment, state.present), warning: action.warning })
     }
     case 'undo': {
       const present = state.past[state.past.length - 1]
