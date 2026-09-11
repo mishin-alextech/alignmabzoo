@@ -15,8 +15,6 @@ services:
     volumes:
       - /home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro
       - /home/bioinfo/containers/alignmabzoo-dev/jobs:/app/jobs
-    ports:
-      - "127.0.0.1:${ALIGNMABZOO_DEV_PORT:-5000}:8000"
     expose:
       - "8000"
     cpus: 2.0

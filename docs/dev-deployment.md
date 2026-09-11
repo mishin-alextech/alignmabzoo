@@ -10,15 +10,14 @@ Production зафиксирован в main и не обновляется эт�
 | Jobs на хосте | `/home/bioinfo/containers/alignmabzoo-dev/jobs` |
 | Источник | `/home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro` |
 | Сеть контейнера | `internal-net` |
-| Nginx upstream | `127.0.0.1:5000` |
-| Host-порт | `127.0.0.1:5000` |
+| Nginx upstream | `dev-alignmabzoo:8000` через `internal-net` |
+| Host-порт приложения | Не публикуется |
 | Nginx шаблон | `nginx/dev-alignmabzoo.conf` |
 
-В `.env` dev можно задать `ALIGNMABZOO_DEV_PORT=5000` и
-`ALIGNMABZOO_DEV_IMAGE_TAG=local`. Другой свободный порт разрешает конфликт bind.
-Общий Nginx установлен на хосте, поэтому он обращается к
-`127.0.0.1:<порт>`, а не к Docker DNS. Loopback-публикация не открывает dev
-извне напрямую: доступ даёт только отдельный Nginx virtual host.
+В `.env` dev можно задать `ALIGNMABZOO_DEV_IMAGE_TAG=local`. Общий Nginx
+работает в контейнере и находится с dev в `internal-net`, поэтому он обращается
+к `dev-alignmabzoo:8000` через Docker DNS. Порт приложения на хост не
+публикуется: извне доступны только 80/443 контейнера Nginx.
 
 ## Существующий dev-контейнер
 
@@ -26,8 +25,8 @@ Production зафиксирован в main и не обновляется эт�
 dev-контейнера. Одного container name недостаточно. Явный `-p dev-alignmabzoo`
 ниже исключает выбор production project из переменных оболочки, но не мигрирует
 контейнер, ранее запущенный через docker run или другой Compose project/service.
-В таком случае отдельно заменяется именно старый dev; он может продолжать занимать
-5000. Не использовать down общего проекта alignmabzoo или remove-orphans.
+В таком случае отдельно заменяется именно старый dev. Не использовать down
+общего проекта alignmabzoo или remove-orphans.
 
 Команды чтения состояния:
 
@@ -77,9 +76,9 @@ docker compose -p dev-alignmabzoo logs --tail 100 dev-alignmabzoo
 
 Production Nginx-шаблон сохранён. Dev публикуется отдельно как
 `dev-alignmabzoo.bioinfo3.immunochemistry.local` через
-`nginx/dev-alignmabzoo.conf`, проксирующий на `127.0.0.1:5000`. DNS и TLS
-настраиваются отдельно. Сам файл в репозитории не меняет действующую конфигурацию
-Nginx.
+`nginx/dev-alignmabzoo.conf`, проксирующий на `dev-alignmabzoo:8000` в
+`internal-net`. DNS и TLS настраиваются в контейнере общего Nginx. Сам файл в
+репозитории не меняет действующую конфигурацию Nginx.
 
 Реестр и очередь требуют ровно одного ASGI worker. Не переопределять CMD на два
 workers и не запускать несколько контейнеров с одним jobs-root. Две вычислительные
