@@ -1,6 +1,6 @@
-import { Alert, Box, Button, FormControl, InputLabel, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material'
-import { useEffect, useState } from 'react'
-import { ApiError, api, type CdrScheme, type ClusterResult, type ClusterScope } from '../api/client'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, FormControl, InputLabel, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material'
+import { useEffect, useMemo, useState } from 'react'
+import { ApiError, api, type AlignmentSequence, type CdrScheme, type ClusterResult, type ClusterScope } from '../api/client'
 
 type Props = {
   jobId: string
@@ -20,25 +20,44 @@ export function ClusteringPlaceholder({ jobId, sequenceIds, onBack, onApplyOrder
   const [error, setError] = useState<string>()
   const [result, setResult] = useState<ClusterResult>()
   const [availableIds, setAvailableIds] = useState<string[]>(sequenceIds ?? [])
+  const [sequencesById, setSequencesById] = useState<Map<string, AlignmentSequence>>(new Map())
   const [loadingIds, setLoadingIds] = useState(sequenceIds === undefined)
 
   useEffect(() => {
-    if (sequenceIds !== undefined) {
-      setAvailableIds(sequenceIds)
-      setLoadingIds(false)
-      return
-    }
     let active = true
     setLoadingIds(true)
     void api.alignments(jobId).then(
       (alignment) => {
         if (!active) return
-        setAvailableIds((alignment.groups ?? []).flatMap((group) => group.sequences.map((sequence) => sequence.id ?? '')).filter((id) => id.startsWith('seq_')))
+        const sequences = (alignment.groups ?? []).flatMap((group) => group.sequences)
+        setSequencesById(new Map(sequences.flatMap((sequence) => sequence.id ? [[sequence.id, sequence] as const] : [])))
+        const ids = sequences.map((sequence) => sequence.id ?? '').filter((id) => id.startsWith('seq_'))
+        setAvailableIds(sequenceIds === undefined ? ids : sequenceIds.filter((id) => ids.includes(id)))
       },
       (reason) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Не удалось загрузить выравнивание для кластеризации.') },
     ).finally(() => { if (active) setLoadingIds(false) })
     return () => { active = false }
   }, [jobId, sequenceIds])
+
+  const clusterSections = useMemo(() => {
+    if (!result) return []
+    const sections = new Map<string, { clusters: ClusterResult['clusters']; singletonCount: number }>()
+    result.clusters.forEach((cluster) => {
+      const section = sections.get(cluster.chain_group) ?? { clusters: [], singletonCount: 0 }
+      if (cluster.size > 1) section.clusters.push(cluster)
+      else section.singletonCount += cluster.size
+      sections.set(cluster.chain_group, section)
+    })
+    return [...sections.entries()].map(([chainGroup, section]) => ({ chainGroup, ...section }))
+  }, [result])
+  const visibleClusterNumbers = useMemo(() => new Map(
+    clusterSections.flatMap((section) => section.clusters).map((cluster, index) => [cluster.id, index + 1]),
+  ), [clusterSections])
+  const clusterMemberLabel = (sequenceId: string) => {
+    const sequence = sequencesById.get(sequenceId)
+    if (!sequence) return `Неизвестная группа / ${sequenceId}`
+    return `${sequence.source?.group ?? 'Неизвестная группа'} / ${sequence.name}`
+  }
 
   const run = async () => {
     const identity = Number(minSeqId)
@@ -124,16 +143,26 @@ export function ClusteringPlaceholder({ jobId, sequenceIds, onBack, onApplyOrder
           {error && <Alert severity="warning">{error}</Alert>}
           {result && <Stack spacing={1}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-              <Typography>Кластеров: {result.clusters.length}; вне кластеризации: {result.unclustered.length}.</Typography>
+              <Typography>Кластеров из нескольких последовательностей: {visibleClusterNumbers.size}; вне расчёта: {result.unclustered.length}.</Typography>
               {onApplyOrder && <Button size="small" variant="outlined" onClick={() => onApplyOrder(result.order)}>Расположить строки блоками кластеров</Button>}
             </Stack>
-            {result.unclustered.length > 0 && <Alert severity="info">Некоторые строки не вошли в расчёт: {result.unclustered.map((item) => item.id).join(', ')}.</Alert>}
-            {result.clusters.map((cluster) => <Paper key={cluster.id} variant="outlined" sx={{ p: 1.5 }}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1}>
-                <Typography>{cluster.chain_group}: {cluster.size} последовательностей</Typography>
-                {cluster.size > 1 && <Button size="small" variant="outlined" onClick={() => void createClusterAlignment(cluster)}>Выровнять кластер</Button>}
-              </Stack>
-            </Paper>)}
+            {result.unclustered.length > 0 && <Alert severity="info">Не вошли в расчёт: {result.unclustered.length} последовательностей.</Alert>}
+            {clusterSections.map((section) => <Stack key={section.chainGroup} spacing={1}>
+              {section.clusters.map((cluster) => <Accordion key={cluster.id} variant="outlined" disableGutters>
+                <AccordionSummary>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1} width="100%" mr={1}>
+                    <Typography>Кластер №{visibleClusterNumbers.get(cluster.id)} · {cluster.chain_group}: {cluster.size} последовательностей</Typography>
+                    <Button size="small" variant="outlined" onClick={(event) => { event.stopPropagation(); void createClusterAlignment(cluster) }}>Выровнять кластер</Button>
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2.5 }}>
+                    {cluster.sequence_ids.map((sequenceId) => <Typography component="li" key={sequenceId}>{clusterMemberLabel(sequenceId)}</Typography>)}
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>)}
+              {section.singletonCount > 0 && <Typography variant="body2" color="text.secondary">{section.chainGroup}: не попали в кластеры: {section.singletonCount} последовательностей.</Typography>}
+            </Stack>)}
           </Stack>}
         </Stack>
       </Paper>

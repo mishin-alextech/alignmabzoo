@@ -137,6 +137,7 @@ function AlignmentGroupPanel({
   onToggleExclusion,
   fullScreen,
   onOpenInNewTab,
+  onClearSelection,
   disabled,
 }: {
   group: ViewerGroup
@@ -152,6 +153,7 @@ function AlignmentGroupPanel({
   onToggleExclusion: (sequenceId: string) => void
   fullScreen: boolean
   onOpenInNewTab?: () => void
+  onClearSelection: () => void
   disabled: boolean
 }) {
   const columns = useMemo(() => calculateConsensus(group, consensusThreshold), [group, consensusThreshold])
@@ -159,7 +161,7 @@ function AlignmentGroupPanel({
   const schemeColor = schemes.find((item) => item.value === scheme)?.color ?? 'transparent'
 
   return (
-    <Paper variant="outlined" sx={{ p: { xs: 1, sm: 2 }, minWidth: 0 }}>
+    <Paper variant="outlined" onClick={onClearSelection} sx={{ p: { xs: 1, sm: 2 }, minWidth: 0 }}>
       <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
         <Typography variant="h6">{group.name}</Typography>
         <Button size="small" onClick={() => downloadVisibleAlignment(group)}>Скачать отображаемое выравнивание</Button>
@@ -176,7 +178,7 @@ function AlignmentGroupPanel({
               const isSelected = selectedSequence === sequence.id
               let position = 0
               return (
-                <Box component="tr" key={sequence.id} tabIndex={0} onClick={() => onSelect(sequence.id)} onKeyDown={(event) => {
+                <Box component="tr" key={sequence.id} tabIndex={0} onClick={(event) => { event.stopPropagation(); onSelect(sequence.id) }} onKeyDown={(event) => {
                   if (event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) return
                   if (disabled || !event.ctrlKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
                   event.preventDefault()
@@ -221,7 +223,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
   const [showConsensus, setShowConsensus] = useState(true)
   const [showCdr, setShowCdr] = useState(true)
   const [showZappo, setShowZappo] = useState(false)
-  const [selectedSourceKey, setSelectedSourceKey] = useState('')
+  const [selectedSourceKeys, setSelectedSourceKeys] = useState<string[]>([])
   const [realigning, setRealigning] = useState(false)
   const [realignError, setRealignError] = useState<string>()
   const requestVersion = useRef(0)
@@ -235,7 +237,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     busy.current = false
     setRealigning(false)
     setRealignError(undefined)
-    setSelectedSourceKey('')
+    setSelectedSourceKeys([])
     dispatch({ type: 'reset', jobId })
     setError(undefined)
     void api.alignments(jobId).then(
@@ -265,12 +267,12 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
   const presentIds = new Set(viewer.present?.includedIds ?? [])
   const sourceOptions = useMemo(() => {
     const options = new Map<string, ViewerSequence>()
-    originalSequences.forEach((sequence) => {
+    viewer.present?.alignment.groups.flatMap((group) => group.sequences).forEach((sequence) => {
       const key = sourceKey(sequence)
       if (key && !options.has(key)) options.set(key, sequence)
     })
     return [...options.entries()]
-  }, [viewer.original])
+  }, [viewer.present])
   const baselineExcludedIds = useMemo(() => {
     const originalIds = new Set(originalSequences.map((sequence) => sequence.id))
     return [...originalIds].filter((id) => !presentIds.has(id)).sort()
@@ -280,13 +282,17 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     || draftExcludedIds.some((id, index) => id !== baselineExcludedIds[index])
   const excluded = new Set(viewer.draftExcludedIds)
   const retainedIds = originalSequences.filter((sequence) => !excluded.has(sequence.id)).map((sequence) => sequence.id)
-  const selectedSourceIds = originalSequences.filter((sequence) => sourceKey(sequence) === selectedSourceKey).map((sequence) => sequence.id)
-  const sourceExcluded = selectedSourceIds.length > 0 && selectedSourceIds.every((id) => excluded.has(id))
-  const toggleSourceExclusion = (key: string) => {
-    const ids = originalSequences.filter((sequence) => sourceKey(sequence) === key).map((sequence) => sequence.id)
-    const shouldExclude = ids.some((id) => !viewer.draftExcludedIds.includes(id))
+  useEffect(() => {
+    setSelectedSourceKeys(sourceOptions.map(([key]) => key))
+  }, [sourceOptions])
+  const excludeUncheckedSources = () => {
+    const selected = new Set(selectedSourceKeys)
     const next = new Set(viewer.draftExcludedIds)
-    ids.forEach((id) => shouldExclude ? next.add(id) : next.delete(id))
+    sourceOptions.forEach(([key]) => {
+      if (!selected.has(key)) {
+        originalSequences.filter((sequence) => sourceKey(sequence) === key).forEach((sequence) => next.add(sequence.id))
+      }
+    })
     dispatch({ type: 'setDraftExclusions', sequenceIds: [...next] })
   }
   const applyExclusions = async () => {
@@ -366,14 +372,23 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
       )}
       <Box component="fieldset" disabled={realigning} sx={{ m: 0, p: 0, border: 0, minWidth: 0 }}>
       <Paper variant="outlined" sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, flexWrap: 'wrap' }}>
-        <FormControl size="small" sx={{ minWidth: 240 }}>
-          <InputLabel id="source-group-label">Исходная группа</InputLabel>
-          <Select labelId="source-group-label" value={selectedSourceKey} label="Исходная группа" onChange={(event) => setSelectedSourceKey(event.target.value)}>
-            <MenuItem value="">Все группы</MenuItem>
-            {sourceOptions.map(([key, sequence]) => <MenuItem key={key} value={key}>{sourceLabel(sequence)}</MenuItem>)}
+        <FormControl size="small" sx={{ minWidth: 300 }}>
+          <InputLabel id="source-group-label">Исходные группы</InputLabel>
+          <Select
+            multiple
+            labelId="source-group-label"
+            value={selectedSourceKeys}
+            label="Исходные группы"
+            renderValue={(keys) => `Выбрано групп: ${keys.length} из ${sourceOptions.length}`}
+            onChange={(event) => setSelectedSourceKeys(event.target.value as string[])}
+          >
+            {sourceOptions.map(([key, sequence]) => <MenuItem key={key} value={key}>
+              <Checkbox checked={selectedSourceKeys.includes(key)} />
+              {sourceLabel(sequence)}
+            </MenuItem>)}
           </Select>
         </FormControl>
-        {selectedSourceKey && <Button size="small" variant="outlined" onClick={() => toggleSourceExclusion(selectedSourceKey)}>{sourceExcluded ? 'Вернуть группу' : 'Исключить группу'}</Button>}
+        <Button size="small" variant="outlined" disabled={selectedSourceKeys.length === sourceOptions.length} onClick={excludeUncheckedSources}>Исключить снятые группы</Button>
         <Button size="small" variant="outlined" disabled={!viewer.selected} onClick={() => viewer.selected && dispatch({ type: 'sortCdr3', groupName: viewer.selected.groupName, scheme, direction: 'ascending' })}>Сортировать CDR3</Button>
         <Button size="small" variant="outlined" onClick={openClustering}>Кластеризовать</Button>
         <Tooltip title="Повторное выравнивание появится позже">
@@ -397,7 +412,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
       </Box>
       {realignError && <Alert severity="warning">{realignError}</Alert>}
       {viewer.present.warning && <Alert severity="warning">{viewer.present.warning}</Alert>}
-      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => { if (!realigning) dispatch({ type: 'move', groupName: group.name, sequenceId, offset }) }} excludedIds={viewer.draftExcludedIds} onToggleExclusion={(sequenceId) => dispatch({ type: 'toggleDraftExclusion', sequenceId })} disabled={realigning} fullScreen={fullScreen} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
+      {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => { if (!realigning) dispatch({ type: 'move', groupName: group.name, sequenceId, offset }) }} excludedIds={viewer.draftExcludedIds} onToggleExclusion={(sequenceId) => dispatch({ type: 'toggleDraftExclusion', sequenceId })} disabled={realigning} fullScreen={fullScreen} onClearSelection={() => dispatch({ type: 'select', selection: null })} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
       <Typography variant="body2" color="text.secondary">Файлы расчёта текущей версии (порядок до ручной перестановки строк):</Typography>
       <Box display="flex" gap={1} flexWrap="wrap">
         {([
