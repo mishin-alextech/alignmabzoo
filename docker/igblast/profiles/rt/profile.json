@@ -1,0 +1,10 @@
+{
+  "id": "rt-imgt-202631-1",
+  "version": "202631-1",
+  "organism": "rat",
+  "v_db": "/opt/igblast/profiles/rt/databases/imgt_rt_v",
+  "d_db": "/opt/igblast/profiles/rt/databases/imgt_rt_d",
+  "j_db": "/opt/igblast/profiles/rt/databases/imgt_rt_j",
+  "auxiliary_data": "/opt/igblast/profiles/rt/igdata/optional_file/rat_gl.aux",
+  "igdata": "/opt/igblast/profiles/rt/igdata"
+}

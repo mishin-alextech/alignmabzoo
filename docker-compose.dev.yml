@@ -1,0 +1,28 @@
+name: dev-alignmabzoo
+
+services:
+  dev-alignmabzoo:
+    image: dev-alignmabzoo:${ALIGNMABZOO_DEV_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MMSEQS_GIT_REF: ${MMSEQS_GIT_REF:-master}
+    restart: unless-stopped
+    environment:
+      ALIGNMABZOO_DATA_ROOT: /synced_data/mabzoo
+      ALIGNMABZOO_JOBS_ROOT: /app/jobs
+      MAX_CONCURRENT_JOBS: "2"
+      MMSEQS_NUM_THREADS: "1"
+    volumes:
+      - /home/bioinfo/synced_data/mabzoo:/synced_data/mabzoo:ro
+      - /home/bioinfo/containers/alignmabzoo-dev/jobs:/app/jobs
+    expose:
+      - "8000"
+    cpus: 2.0
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    external: true

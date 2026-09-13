@@ -39,12 +39,14 @@ export function AlignmentExclusions({ jobId }: Props) {
   const skipped = report.skipped ?? []
   const clustaloExclusions = report.clustalo_exclusions ?? []
   const errors = report.errors ?? []
+  const userExclusions = report.user_exclusions ?? []
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography component="h3" variant="h6" gutterBottom>Отчёт по входным файлам</Typography>
       <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>Обработано: {processed.length}; пропущено: {skipped.length + clustaloExclusions.length}; ошибок: {errors.length}.</Typography>
       <Stack spacing={1.5}>
         <Entries title="Обработанные файлы" entries={processed} />
+        <Entries title="Исключены пользователем" entries={userExclusions} />
         <Divider />
         <Entries title="Пропущенные файлы" entries={skipped} severity="warning" />
         <Entries title="Не прошедшие Clustal Omega" entries={clustaloExclusions} severity="warning" />

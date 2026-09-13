@@ -34,6 +34,8 @@ export type Job = {
   counts?: JobCounts
   failure_reason?: string | null
   selection?: JobSelection
+  parent_job_id?: string | null
+  sequence_ids?: string[]
 }
 
 export type CdrScheme = 'imgt' | 'kabat' | 'chothia'
@@ -45,8 +47,15 @@ export type CdrPositions = {
 }
 
 export type AlignmentSequence = {
+  id?: string
   name: string
   seq: string
+  source?: {
+    animal: string
+    project: string
+    group: string
+    relative_path: string
+  }
   numbering?: Partial<Record<CdrScheme, Array<string | number | null>>>
   cdr?: Partial<Record<CdrScheme, CdrPositions>>
 }
@@ -59,12 +68,67 @@ export type AlignmentGroup = {
 export type AlignmentResponse = { groups?: AlignmentGroup[] }
 export type BrowsePage = { items: string[]; nextOffset: number | null }
 
+export type ClusterScope = 'cdr3' | 'variable_domain'
+export type Cluster = {
+  id: string
+  representative_id: string
+  sequence_ids: string[]
+  chain_group: string
+  size: number
+}
+export type ClusterResult = {
+  clusters: Cluster[]
+  unclustered: Array<{ id: string; reason: string }>
+  order: string[]
+}
+
+export type VdjCall = {
+  gene?: string | null
+  allele?: string | null
+  identity?: number | null
+  score?: number | null
+  evalue?: number | null
+}
+
+export type VdjRecord = {
+  sequence_id: string
+  status: 'ready' | 'unavailable' | 'failed' | 'ambiguous' | string
+  reason?: string | null
+  profile_id?: string | null
+  tool_version?: string | null
+  locus?: string | null
+  v_calls?: Array<VdjCall | string>
+  d_calls?: Array<VdjCall | string>
+  j_calls?: Array<VdjCall | string>
+  junction?: { nt?: string | null; aa?: string | null } | null
+  metrics?: {
+    identity?: number | null
+    alignment_length?: number | null
+    coverage?: number | null
+    score?: number | null
+    evalue?: number | null
+  } | null
+  details?: {
+    query_length?: number | null
+    significant_alignments?: string | null
+    alignments?: string | null
+  } | null
+}
+
+export type VdjResult = {
+  version: number
+  parent_job_id?: string | null
+  profile?: { id?: string; version?: string; animal?: string; source?: string } | null
+  records: VdjRecord[]
+}
+
 export type ReportEntry = { path?: string; reason?: string }
 
 export type JobReport = {
   processed?: ReportEntry[]
   skipped?: ReportEntry[]
   clustalo_exclusions?: ReportEntry[]
+  user_exclusions?: ReportEntry[]
   errors?: ReportEntry[]
 }
 
@@ -161,6 +225,42 @@ export const api = {
     })
   },
 
+  async realign(jobId: string, sequenceIds: string[]): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/realign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sequence_ids: sequenceIds }),
+    })
+  },
+
+  async cluster(jobId: string, input: {
+    sequenceIds: string[]
+    scope: ClusterScope
+    numberingScheme?: CdrScheme
+    minSeqId: number
+    coverage: number
+  }): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/cluster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sequence_ids: input.sequenceIds,
+        scope: input.scope,
+        numbering_scheme: input.numberingScheme,
+        min_seq_id: input.minSeqId,
+        coverage: input.coverage,
+      }),
+    })
+  },
+
+  async vdj(jobId: string, sequenceIds: string[]): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/vdj`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sequence_ids: sequenceIds }),
+    })
+  },
+
   async jobs(): Promise<Job[]> {
     const response = await request<{ jobs?: Job[] } | Job[]>('/jobs')
     return Array.isArray(response) ? response : response.jobs ?? []
@@ -210,11 +310,19 @@ export const api = {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/exclusions`)
   },
 
+  clusters(jobId: string): Promise<ClusterResult> {
+    return request<ClusterResult>(`/jobs/${encodeURIComponent(jobId)}/clusters`)
+  },
+
+  vdjResults(jobId: string): Promise<VdjResult> {
+    return request<VdjResult>(`/jobs/${encodeURIComponent(jobId)}/vdj-results`)
+  },
+
   report(jobId: string): Promise<JobReport> {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/report`)
   },
 
-  alignmentDownloadUrl(jobId: string, filename: 'vheavy.aln' | 'vkappa.aln' | 'vlambda.aln'): string {
+  alignmentDownloadUrl(jobId: string, filename: 'vheavy.aln' | 'vkappa.aln' | 'vlambda.aln' | 'other.aln'): string {
     return `/api/jobs/${encodeURIComponent(jobId)}/alignments/${encodeURIComponent(filename)}`
   },
 
@@ -224,5 +332,13 @@ export const api = {
 
   anarciDownloadUrl(jobId: string, filename: string): string {
     return `/api/jobs/${encodeURIComponent(jobId)}/anarci/${encodeURIComponent(filename)}`
+  },
+
+  vdjTsvDownloadUrl(jobId: string): string {
+    return `/api/jobs/${encodeURIComponent(jobId)}/vdj-results.tsv`
+  },
+
+  vdjManifestDownloadUrl(jobId: string): string {
+    return `/api/jobs/${encodeURIComponent(jobId)}/vdj-manifest`
   },
 }

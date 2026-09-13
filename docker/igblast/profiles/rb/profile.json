@@ -1,0 +1,10 @@
+{
+  "id": "rb-imgt-202631-1",
+  "version": "202631-1",
+  "organism": "rabbit",
+  "v_db": "/opt/igblast/profiles/rb/databases/imgt_rb_v",
+  "d_db": "/opt/igblast/profiles/rb/databases/imgt_rb_d",
+  "j_db": "/opt/igblast/profiles/rb/databases/imgt_rb_j",
+  "auxiliary_data": "/opt/igblast/profiles/rb/igdata/optional_file/rabbit_gl.aux",
+  "igdata": "/opt/igblast/profiles/rb/igdata"
+}

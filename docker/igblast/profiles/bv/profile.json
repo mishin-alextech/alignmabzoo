@@ -1,0 +1,10 @@
+{
+  "id": "bv-imgt-202631-1",
+  "version": "202631-1",
+  "custom_internal_data": "/opt/igblast/profiles/bv/igdata/internal_data/bv/bv.ndm.imgt",
+  "v_db": "/opt/igblast/profiles/bv/databases/imgt_bv_v",
+  "d_db": "/opt/igblast/profiles/bv/databases/imgt_bv_d",
+  "j_db": "/opt/igblast/profiles/bv/databases/imgt_bv_j",
+  "auxiliary_data": "/opt/igblast/profiles/bv/igdata/optional_file/bv_gl.aux",
+  "igdata": "/opt/igblast/profiles/bv/igdata"
+}

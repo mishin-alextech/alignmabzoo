@@ -1,0 +1,10 @@
+{
+  "id": "ms-imgt-202631-1",
+  "version": "202631-1",
+  "organism": "mouse",
+  "v_db": "/opt/igblast/profiles/ms/databases/imgt_ms_v",
+  "d_db": "/opt/igblast/profiles/ms/databases/imgt_ms_d",
+  "j_db": "/opt/igblast/profiles/ms/databases/imgt_ms_j",
+  "auxiliary_data": "/opt/igblast/profiles/ms/igdata/optional_file/mouse_gl.aux",
+  "igdata": "/opt/igblast/profiles/ms/igdata"
+}

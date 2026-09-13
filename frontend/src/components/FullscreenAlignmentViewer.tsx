@@ -10,7 +10,7 @@ type Props = {
 export function FullscreenAlignmentViewer({ jobId, groupName }: Props) {
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AlignmentViewer jobId={jobId} groupName={groupName} fullScreen />
+      <AlignmentViewer key={jobId} jobId={jobId} groupName={groupName} fullScreen />
     </Box>
   )
 }

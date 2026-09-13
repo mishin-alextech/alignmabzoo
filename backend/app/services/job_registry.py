@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -19,7 +20,7 @@ from app.config import get_settings
 
 
 REGISTRY_FILENAME: Final = "jobs_registry.json"
-REGISTRY_VERSION: Final = 1
+REGISTRY_VERSION: Final = 2
 INTERRUPTED_REASON: Final = "Выполнение job было прервано перезапуском контейнера."
 
 
@@ -43,6 +44,15 @@ class JobStatus(StrEnum):
     DONE = "done"
     PARTIAL = "partial"
     FAILED = "failed"
+
+
+class JobKind(StrEnum):
+    """Тип фоновой обработки, нужный для recovery queued-job."""
+
+    STANDARD = "standard"
+    REALIGNMENT = "realignment"
+    CLUSTERING = "clustering"
+    VDJ = "vdj"
 
 
 TERMINAL_STATUSES: Final = frozenset(
@@ -90,6 +100,9 @@ class JobRecord(BaseModel):
     finished_at: datetime | None = None
     counts: JobCounts = Field(default_factory=JobCounts)
     failure_reason: str | None = None
+    kind: JobKind = JobKind.STANDARD
+    parent_job_id: str | None = None
+    sequence_ids: tuple[str, ...] = ()
 
 
 class _RegistryDocument(BaseModel):
@@ -143,6 +156,7 @@ class JobRegistry:
                 status=JobStatus.QUEUED,
                 created_at=now,
                 updated_at=now,
+                kind=JobKind.STANDARD,
             )
             document.jobs.append(record)
             try:
@@ -152,6 +166,169 @@ class JobRegistry:
                 # только пока он создан данным вызовом и ещё не попал в реестр.
                 try:
                     job_directory.rmdir()
+                except OSError:
+                    pass
+                raise
+            return record
+
+    def create_derived(
+        self,
+        parent_job_id: str | UUID,
+        sequence_ids: Sequence[str],
+    ) -> JobRecord:
+        """Создаёт производную queued-job без доступа к исходному data-root."""
+
+        normalized_parent = self._normalize_job_id(parent_job_id)
+        normalized_ids = tuple(dict.fromkeys(sequence_ids))
+        if not normalized_ids:
+            raise JobRegistryError("Для повторного выравнивания нужно оставить хотя бы одну последовательность.")
+        if not all(isinstance(item, str) and item.startswith(("seq_", "legacy:")) for item in normalized_ids):
+            raise JobRegistryError("Список последовательностей имеет недопустимый формат.")
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            _, parent = self._find_record(document, normalized_parent)
+            if parent.status not in TERMINAL_STATUSES:
+                raise JobRegistryError("Повторное выравнивание доступно только для завершённой job.")
+            job_id = str(uuid4())
+            job_directory = self._job_directory(job_id)
+            try:
+                job_directory.mkdir(mode=0o750)
+            except OSError as error:
+                raise JobRegistryError("Не удалось создать каталог производной job.") from error
+            now = _utc_now()
+            record = JobRecord(
+                id=job_id,
+                name=self._derived_name(parent.name),
+                selection=JobSelection.model_validate({
+                    "parent_job_id": normalized_parent,
+                    "sequence_ids": list(normalized_ids),
+                }),
+                status=JobStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+                kind=JobKind.REALIGNMENT,
+                parent_job_id=normalized_parent,
+                sequence_ids=normalized_ids,
+            )
+            document.jobs.append(record)
+            try:
+                self._write_document(document)
+            except Exception:
+                try:
+                    job_directory.rmdir()
+                except OSError:
+                    pass
+                raise
+            return record
+
+    def create_clustering(
+        self,
+        parent_job_id: str | UUID,
+        sequence_ids: Sequence[str],
+        *,
+        scope: str,
+        numbering_scheme: str | None,
+        min_seq_id: float,
+        coverage: float,
+    ) -> JobRecord:
+        """Создаёт независимую job MMseqs2 по ID сохранённого MSA."""
+
+        normalized_parent = self._normalize_job_id(parent_job_id)
+        normalized_ids = tuple(dict.fromkeys(sequence_ids))
+        if not normalized_ids:
+            raise JobRegistryError("Для кластеризации нужна хотя бы одна последовательность.")
+        if not all(isinstance(item, str) and item.startswith("seq_") for item in normalized_ids):
+            raise JobRegistryError("Кластеризация доступна только для сохранённых стабильных sequence_id.")
+        if scope not in {"cdr3", "variable_domain"}:
+            raise JobRegistryError("Область кластеризации задана недопустимо.")
+        if scope == "cdr3" and numbering_scheme not in {"imgt", "kabat", "chothia"}:
+            raise JobRegistryError("Для CDR3 требуется схема нумерации.")
+        if scope == "variable_domain" and numbering_scheme is not None:
+            raise JobRegistryError("Схема нумерации допустима только для CDR3.")
+        if min_seq_id not in {0.80, 0.90, 0.95} or coverage not in {0.80, 0.90}:
+            raise JobRegistryError("Указаны недопустимые инженерные пороги кластеризации.")
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            _, parent = self._find_record(document, normalized_parent)
+            if parent.status not in TERMINAL_STATUSES:
+                raise JobRegistryError("Кластеризация доступна только для завершённой job.")
+            job_id = str(uuid4())
+            job_directory = self._job_directory(job_id)
+            try:
+                job_directory.mkdir(mode=0o750)
+            except OSError as error:
+                raise JobRegistryError("Не удалось создать каталог job кластеризации.") from error
+            now = _utc_now()
+            record = JobRecord(
+                id=job_id,
+                name=f"{parent.name} — кластеризация"[:200],
+                selection=JobSelection.model_validate({
+                    "parent_job_id": normalized_parent,
+                    "sequence_ids": list(normalized_ids),
+                    "scope": scope,
+                    "numbering_scheme": numbering_scheme,
+                    "min_seq_id": min_seq_id,
+                    "coverage": coverage,
+                }),
+                status=JobStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+                kind=JobKind.CLUSTERING,
+                parent_job_id=normalized_parent,
+                sequence_ids=normalized_ids,
+            )
+            document.jobs.append(record)
+            try:
+                self._write_document(document)
+            except Exception:
+                try:
+                    job_directory.rmdir()
+                except OSError:
+                    pass
+                raise
+            return record
+
+    def create_vdj(self, parent_job_id: str | UUID, sequence_ids: Sequence[str]) -> JobRecord:
+        """Создаёт отдельную job локального V(D)J-анализа по сохранённым stable ID."""
+
+        normalized_parent = self._normalize_job_id(parent_job_id)
+        normalized_ids = tuple(dict.fromkeys(sequence_ids))
+        if not normalized_ids:
+            raise JobRegistryError("Для V(D)J-анализа нужна хотя бы одна последовательность.")
+        if not all(isinstance(item, str) and item.startswith("seq_") for item in normalized_ids):
+            raise JobRegistryError("V(D)J-анализ доступен только для стабильных ID современных результатов.")
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            _, parent = self._find_record(document, normalized_parent)
+            if parent.status not in TERMINAL_STATUSES:
+                raise JobRegistryError("V(D)J-анализ доступен только для завершённой job.")
+            job_id = str(uuid4())
+            directory = self._job_directory(job_id)
+            try:
+                directory.mkdir(mode=0o750)
+            except OSError as error:
+                raise JobRegistryError("Не удалось создать каталог V(D)J-job.") from error
+            now = _utc_now()
+            record = JobRecord(
+                id=job_id,
+                name=f"{parent.name} — V(D)J-анализ"[:200],
+                selection=JobSelection.model_validate({"parent_job_id": normalized_parent, "sequence_ids": list(normalized_ids)}),
+                status=JobStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+                kind=JobKind.VDJ,
+                parent_job_id=normalized_parent,
+                sequence_ids=normalized_ids,
+            )
+            document.jobs.append(record)
+            try:
+                self._write_document(document)
+            except Exception:
+                try:
+                    directory.rmdir()
                 except OSError:
                     pass
                 raise
@@ -276,6 +453,14 @@ class JobRegistry:
                     f"Удалять можно только завершённые job. Job «{nonterminal.name}» ещё выполняется."
                 )
 
+            protected = next((record for record in document.jobs
+                              if record.parent_job_id in normalized_ids
+                              and record.status not in TERMINAL_STATUSES), None)
+            if protected is not None:
+                raise JobRegistryError(
+                    f"Родительская job нужна для незавершённого повторного выравнивания «{protected.name}»."
+                )
+
             directories = [self._safe_job_directory_for_deletion(job_id) for job_id in normalized_ids]
             try:
                 for directory in directories:
@@ -313,8 +498,9 @@ class JobRegistry:
             raise JobRegistryError(
                 "Реестр job повреждён или имеет неподдерживаемый формат."
             ) from error
-        if document.version != REGISTRY_VERSION:
+        if document.version not in {1, REGISTRY_VERSION}:
             raise JobRegistryError("Версия реестра job не поддерживается.")
+        document.version = REGISTRY_VERSION
         self._validate_unique_ids(document)
         return document
 
@@ -382,6 +568,12 @@ class JobRegistry:
         if len(name) > 200:
             raise JobRegistryError("Название job не должно превышать 200 символов.")
         return name
+
+    @staticmethod
+    def _derived_name(parent_name: str) -> str:
+        """Формирует короткое русскоязычное имя производной job."""
+
+        return f"{parent_name} — повторное выравнивание"[:200]
 
     @staticmethod
     def _validate_selection(
@@ -458,6 +650,15 @@ class JobRegistry:
 
 _registry: JobRegistry | None = None
 _registry_lock = RLock()
+_job_tasks: set[asyncio.Task[None]] = set()
+
+
+def retain_job_task(task: asyncio.Task[None]) -> asyncio.Task[None]:
+    """Удерживает фоновую job до завершения в единственном ASGI-процессе."""
+
+    _job_tasks.add(task)
+    task.add_done_callback(_job_tasks.discard)
+    return task
 
 
 def get_job_registry() -> JobRegistry:

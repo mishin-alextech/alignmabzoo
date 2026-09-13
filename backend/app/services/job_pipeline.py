@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from app.services.alignment import (
     build_alignment_document,
     parse_clustal_alignment,
     run_clustalo_batches,
+    validate_sequence_ids,
     write_alignment_document,
 )
 from app.services.anarci_runner import (
@@ -31,6 +33,7 @@ from app.services.parser import SUPPORTED_SUFFIXES, parse_sequence_file
 
 MAX_CONCURRENT_JOBS = min(2, max(1, int(os.environ.get("MAX_CONCURRENT_JOBS", "2"))))
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+_job_tasks: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +94,10 @@ def validate_selection(selection: Mapping[str, Any], discovery: DiscoveryService
 def schedule_job(job: JobRecord, registry: JobRegistry, discovery: DiscoveryService | None = None) -> asyncio.Task[None]:
     """Ставит job в локальную очередь выполнения, ограниченную двумя задачами."""
 
-    return asyncio.create_task(run_job(job.id, registry, discovery), name=f"alignmabzoo-job-{job.id}")
+    task = asyncio.create_task(run_job(job.id, registry, discovery), name=f"alignmabzoo-job-{job.id}")
+    _job_tasks.add(task)
+    task.add_done_callback(_job_tasks.discard)
+    return task
 
 
 async def run_job(job_id: str, registry: JobRegistry, discovery: DiscoveryService | None = None) -> None:
@@ -127,7 +133,10 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
         _append_log(job_directory, f"Найдено входных файлов: {len(source_files)}.")
         parsed_records: list[AlignmentInput] = []
         parsed_paths: dict[str, str] = {}
+        parsed_nucleotides: dict[str, str] = {}
+        manifest_records: list[dict[str, object]] = []
         used_names: set[str] = set()
+        used_ids: set[str] = set()
         for selected_group, source_path in source_files:
             relative = _report_path(selected_group, source_path)
             if exclude_x_file and any(
@@ -168,17 +177,52 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 _append_log(job_directory, f"Переименование {relative}: {sequence_name}.")
             if named.diagnostic:
                 _append_naming_error(job_directory, f"{relative}: {named.diagnostic}")
-            parsed_records.append(AlignmentInput(sequence_name, sequence, named.group, selected_group.animal_code))
-            parsed_paths[sequence_name] = relative
-            report["processed"].append({"path": relative, "name": sequence_name})
+            sequence_id = _sequence_id(selected_group.animal_code, relative, sequence, result.nucleotide_sequence)
+            if sequence_id in used_ids:
+                reason = "Идентификатор исходной записи повторяется; запись не добавлена повторно."
+                report["errors"].append({"path": relative, "reason": reason})
+                counts["files_failed"] += 1
+                _append_log(job_directory, f"Ошибка файла {relative}: {reason}")
+                continue
+            used_ids.add(sequence_id)
+            source = {
+                "animal": selected_group.animal_code,
+                "project": selected_group.project_name,
+                "group": selected_group.group_name,
+                "relative_path": relative,
+            }
+            parsed_records.append(AlignmentInput(sequence_id, sequence_name, sequence, named.group, selected_group.animal_code, source))
+            parsed_paths[sequence_id] = relative
+            if result.nucleotide_sequence is not None:
+                parsed_nucleotides[sequence_id] = result.nucleotide_sequence
+            manifest_records.append(
+                {
+                    "id": sequence_id,
+                    "path": relative,
+                    "original_name": named.source_stem,
+                    "source_filename": result.filename,
+                    "animal": selected_group.animal_code,
+                    "project": selected_group.project_name,
+                    "group": selected_group.group_name,
+                    "chain_group": named.group,
+                    "source": source,
+                    "new_name": sequence_name,
+                    "protein_sequence": sequence,
+                    "nucleotide_sequence": result.nucleotide_sequence,
+                }
+            )
+            report["processed"].append({"path": relative, "name": sequence_name, "id": sequence_id})
             counts["files_processed"] += 1
-        _write_parsed_fasta(job_directory, parsed_records, parsed_paths)
+        validate_sequence_ids(parsed_records)
+        _write_parsed_fasta(job_directory, parsed_records)
+        _write_parsed_nucleotide_fasta(job_directory, parsed_nucleotides)
         _write_named_fasta(job_directory, parsed_records)
+        _write_sequence_manifest(job_directory, manifest_records)
         counts["sequences"] = len(parsed_records)
-        numberings: dict[str, dict[str, object]] = {item.name: {} for item in parsed_records}
+        numberings: dict[str, dict[str, object]] = {item.id: {} for item in parsed_records}
         if parsed_records:
             anarci_results = run_anarci_for_records(
-                records=tuple((item.name, item.sequence, item.group) for item in parsed_records),
+                records=tuple((item.id, item.sequence, item.group) for item in parsed_records),
                 selected_animals=selected_animals,
                 job_directory=job_directory,
                 jobs_root=registry.jobs_root,
@@ -188,9 +232,9 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                 if scheme_result.succeeded:
                     parsed_by_name = parse_anarci_csv_records(scheme_result.output_path)
                     for item in (item for item in parsed_records if _anarci_batch_name(item.group) == scheme_result.batch_name):
-                        parsed = parsed_by_name.get(item.name)
+                        parsed = parsed_by_name.get(item.id)
                         if parsed is not None and parsed.residues:
-                            numberings[item.name][scheme_result.scheme] = parsed
+                            numberings[item.id][scheme_result.scheme] = parsed
                         elif parsed is not None:
                             reason = parsed.warning or "Строка последовательности CSV ANARCI не содержит распознаваемых позиций нумерации."
                             report["errors"].append({"path": item.name, "reason": f"ANARCI {scheme_result.scheme}: {reason}"})
@@ -213,7 +257,7 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     reason = f"Не прошедшие Clustal Omega: {exclusion.reason}"
                     report["clustalo_exclusions"].append(
                         {
-                            "path": parsed_paths.get(exclusion.record.name, exclusion.record.name),
+                            "path": parsed_paths.get(exclusion.record.id, exclusion.record.name),
                             "reason": reason,
                         }
                     )
@@ -226,9 +270,15 @@ def _run_job_sync(job_id: str, registry: JobRegistry, discovery: DiscoveryServic
                     reason = batch.result.error or "Непредвиденная ошибка Clustal Omega."
                     report["errors"].append({"path": f"alignment/{batch.batch_name}", "reason": reason})
                     _append_log(job_directory, f"Ошибка выравнивания {batch.batch_name}: {reason}")
+                if batch.result is not None and batch.result.generated_without_command:
+                    _append_log(job_directory, f"Выравнивание {batch.batch_name}: одна последовательность, файл создан без запуска Clustal Omega.")
             if aligned_records:
                 document = build_alignment_document(aligned_records, aligned, numberings)
                 write_alignment_document(document, job_directory=job_directory, jobs_root=registry.jobs_root)
+                counts["sequences"] = len(aligned_records)
+            else:
+                counts["sequences"] = 0
+                raise ValueError("Не удалось получить ни одной пригодной последовательности MSA.")
         else:
             report["skipped"].append({"path": "job", "reason": "Не найдено пригодных последовательностей для выравнивания."})
             counts["files_skipped"] += 1
@@ -264,7 +314,8 @@ def _discover_files(groups: Iterable[SelectedGroup]) -> Iterable[tuple[SelectedG
 
 
 def _report_path(selected: SelectedGroup, source: Path) -> str:
-    return f"{selected.project_name}/{selected.group_name}/{source.name}"
+    relative = source.relative_to(selected.directory).as_posix()
+    return f"{selected.project_name}/{selected.group_name}/{relative}"
 
 
 def _unique_name(value: str, used: set[str]) -> str:
@@ -274,6 +325,24 @@ def _unique_name(value: str, used: set[str]) -> str:
         index += 1
     used.add(candidate)
     return candidate
+
+
+def _sequence_id(animal_code: str, path: str, protein: str, nucleotide: str | None) -> str:
+    """Создаёт стабильный безопасный ID для одной исходной записи."""
+
+    identity = json.dumps(
+        {
+            "schema": "sequence-id-v2",
+            "animal": animal_code,
+            "path": path,
+            "protein": protein,
+            "nucleotide": nucleotide or "",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"seq_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:26]}"
 
 
 def _normalize_protein_sequence(sequence: str) -> str | None:
@@ -297,20 +366,47 @@ def _anarci_batch_name(group: str) -> str:
     return "other"
 
 
-def _write_parsed_fasta(directory: Path, records: list[AlignmentInput], paths: Mapping[str, str]) -> None:
-    """Записывает извлечённые цепи с исходным путём проекта и группы в FASTA-заголовке."""
+def _write_parsed_fasta(directory: Path, records: list[AlignmentInput]) -> None:
+    """Записывает исходные пути проекта и группы без вложенных подкаталогов."""
 
     lines: list[str] = []
     for item in records:
-        lines.extend((f">{paths[item.name]}", item.sequence))
+        filename = item.source["relative_path"].replace("\\", "/").rsplit("/", 1)[-1]
+        header = f"{item.source['project']}/{item.source['group']}/{filename}"
+        lines.extend((f">{header}", item.sequence))
     job_child_path(directory, "parsed_chains.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _write_named_fasta(directory: Path, records: list[AlignmentInput]) -> None:
     lines: list[str] = []
     for item in records:
-        lines.extend((f">{item.name}", item.sequence))
+        lines.extend((f">{item.id} {item.name}", item.sequence))
     job_child_path(directory, "chains_named.fasta").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def _write_parsed_nucleotide_fasta(
+    directory: Path,
+    sequences: Mapping[str, str],
+) -> None:
+    """Записывает нуклеотиды выбранных feature со стабильными FASTA-ID."""
+
+    lines: list[str] = []
+    for sequence_name, sequence in sequences.items():
+        lines.extend((f">{sequence_name}", sequence))
+    job_child_path(directory, "parsed_chains_nucleotide.txt").write_text(
+        "\n".join(lines) + ("\n" if lines else ""),
+        encoding="utf-8",
+    )
+
+
+def _write_sequence_manifest(directory: Path, records: list[Mapping[str, object]]) -> None:
+    """Фиксирует связь исходного пути, имён и белково-нуклеотидной пары."""
+
+    document = {"sequences": records}
+    job_child_path(directory, "sequence_manifest.json").write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _append_log(directory: Path, message: str) -> None:
@@ -330,6 +426,10 @@ def _log_command(directory: Path, result: object) -> None:
     returncode = getattr(result, "returncode", None)
     error = getattr(result, "error", None)
     _append_log(directory, f"Команда: {' '.join(command)}; код возврата: {returncode}; ошибка: {error or 'нет'}.")
+    for stream in ("stdout", "stderr"):
+        text = getattr(result, stream, "")
+        if text:
+            _append_log(directory, f"Вывод команды ({stream}):\n{text}")
 
 
 def _write_report(directory: Path, report: Mapping[str, object]) -> None:

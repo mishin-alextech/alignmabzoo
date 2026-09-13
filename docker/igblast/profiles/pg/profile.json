@@ -1,0 +1,10 @@
+{
+  "id": "pg-imgt-202631-1",
+  "version": "202631-1",
+  "custom_internal_data": "/opt/igblast/profiles/pg/igdata/internal_data/pg/pg.ndm.imgt",
+  "v_db": "/opt/igblast/profiles/pg/databases/imgt_pg_v",
+  "d_db": "/opt/igblast/profiles/pg/databases/imgt_pg_d",
+  "j_db": "/opt/igblast/profiles/pg/databases/imgt_pg_j",
+  "auxiliary_data": "/opt/igblast/profiles/pg/igdata/optional_file/pg_gl.aux",
+  "igdata": "/opt/igblast/profiles/pg/igdata"
+}

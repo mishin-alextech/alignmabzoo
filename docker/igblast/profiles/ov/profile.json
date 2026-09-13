@@ -1,0 +1,10 @@
+{
+  "id": "ov-imgt-202631-1",
+  "version": "202631-1",
+  "custom_internal_data": "/opt/igblast/profiles/ov/igdata/internal_data/ov/ov.ndm.imgt",
+  "v_db": "/opt/igblast/profiles/ov/databases/imgt_ov_v",
+  "d_db": "/opt/igblast/profiles/ov/databases/imgt_ov_d",
+  "j_db": "/opt/igblast/profiles/ov/databases/imgt_ov_j",
+  "auxiliary_data": "/opt/igblast/profiles/ov/igdata/optional_file/ov_gl.aux",
+  "igdata": "/opt/igblast/profiles/ov/igdata"
+}
