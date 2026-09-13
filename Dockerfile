@@ -2,6 +2,12 @@
 
 FROM node:22-bookworm-slim AS frontend-builder
 
+ARG IO_LIB_REF=io_lib-1-15-1
+ENV DEBIAN_FRONTEND=noninteractive
+# Универсальная подмена зеркал для старого и нового формата APT
+RUN sed -i 's/deb.debian.org/mirror.yandex.ru/g' /etc/apt/sources.list.d/*.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirror.yandex.ru/g' /etc/apt/sources.list
+
 WORKDIR /build/frontend
 
 COPY frontend/package.json ./
