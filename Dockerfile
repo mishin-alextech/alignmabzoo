@@ -44,10 +44,12 @@ RUN apt-get update \
 
 FROM python:3.12-slim-bookworm AS runtime
 
+ARG IGBLAST_REQUIRED=0
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PATH=/opt/mmseqs2/bin:$PATH
+    PATH=/opt/igblast/bin:/opt/mmseqs2/bin:$PATH
 
 WORKDIR /app
 
@@ -63,6 +65,41 @@ RUN apt-get update \
 
 COPY --from=mmseqs-builder /opt/mmseqs2/ /opt/mmseqs2/
 COPY --from=mmseqs-builder /build/mmseqs2-revision /usr/local/share/mmseqs2-revision
+
+# IgBLAST и IMGT-профили намеренно не загружаются в Dockerfile. До передачи
+# проверенных локальных артефактов обычная dev-сборка остаётся доступной, а
+# V(D)J-сборка с IGBLAST_REQUIRED=1 завершается до публикации образа.
+# Контракт имён, структуры и контрольных сумм — docker/igblast/README.md.
+COPY docker/igblast/ /tmp/igblast-source/
+RUN set -eu; \
+    if [ "$IGBLAST_REQUIRED" = "1" ]; then \
+        test -f /tmp/igblast-source/igblast.sha256; \
+        set -- /tmp/igblast-source/dist/*.tar.gz; \
+        test -f "$1" && test "$#" -eq 1; \
+        (cd /tmp/igblast-source && sha256sum --check igblast.sha256); \
+        mkdir -p /tmp/igblast-unpack /opt/igblast/bin /opt/igblast/profiles; \
+        tar -xzf "$1" -C /tmp/igblast-unpack; \
+        igblastn_path="$(find /tmp/igblast-unpack -type f -name igblastn -print -quit)"; \
+        makeblastdb_path="$(find /tmp/igblast-unpack -type f -name makeblastdb -print -quit)"; \
+        test -n "$igblastn_path" && test -n "$makeblastdb_path"; \
+        install -m 0755 "$igblastn_path" /opt/igblast/bin/igblastn; \
+        install -m 0755 "$makeblastdb_path" /opt/igblast/bin/makeblastdb; \
+        test -f /tmp/igblast-source/profiles/manifest.json; \
+        test -f /tmp/igblast-source/profiles/SHA256SUMS; \
+        (cd /tmp/igblast-source/profiles && sha256sum --check SHA256SUMS); \
+        for profile in hu ms rb rt; do test -f "/tmp/igblast-source/profiles/$profile/profile.json"; done; \
+        cp -a /tmp/igblast-source/profiles/. /opt/igblast/profiles/; \
+        chmod -R a-w /opt/igblast; \
+        command -v igblastn; \
+        command -v makeblastdb; \
+        igblastn -version; \
+        makeblastdb -version; \
+    else \
+        mkdir -p /opt/igblast/profiles; \
+        printf '%s\\n' 'V(D)J profile artifacts were not supplied; build with IGBLAST_REQUIRED=1 only after verification.' > /opt/igblast/profiles/UNAVAILABLE; \
+        chmod -R a-w /opt/igblast; \
+    fi; \
+    rm -rf /tmp/igblast-source /tmp/igblast-unpack
 
 # Backend — устанавливаемый Python-пакет с ASGI-приложением app.main:app.
 COPY backend/ /build/backend/

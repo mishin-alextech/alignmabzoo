@@ -52,6 +52,7 @@ class JobKind(StrEnum):
     STANDARD = "standard"
     REALIGNMENT = "realignment"
     CLUSTERING = "clustering"
+    VDJ = "vdj"
 
 
 TERMINAL_STATUSES: Final = frozenset(
@@ -284,6 +285,50 @@ class JobRegistry:
             except Exception:
                 try:
                     job_directory.rmdir()
+                except OSError:
+                    pass
+                raise
+            return record
+
+    def create_vdj(self, parent_job_id: str | UUID, sequence_ids: Sequence[str]) -> JobRecord:
+        """Создаёт отдельную job локального V(D)J-анализа по сохранённым stable ID."""
+
+        normalized_parent = self._normalize_job_id(parent_job_id)
+        normalized_ids = tuple(dict.fromkeys(sequence_ids))
+        if not normalized_ids:
+            raise JobRegistryError("Для V(D)J-анализа нужна хотя бы одна последовательность.")
+        if not all(isinstance(item, str) and item.startswith("seq_") for item in normalized_ids):
+            raise JobRegistryError("V(D)J-анализ доступен только для стабильных ID современных результатов.")
+        with self._lock:
+            self._ensure_jobs_root()
+            document = self._read_document()
+            _, parent = self._find_record(document, normalized_parent)
+            if parent.status not in TERMINAL_STATUSES:
+                raise JobRegistryError("V(D)J-анализ доступен только для завершённой job.")
+            job_id = str(uuid4())
+            directory = self._job_directory(job_id)
+            try:
+                directory.mkdir(mode=0o750)
+            except OSError as error:
+                raise JobRegistryError("Не удалось создать каталог V(D)J-job.") from error
+            now = _utc_now()
+            record = JobRecord(
+                id=job_id,
+                name=f"{parent.name} — V(D)J-анализ"[:200],
+                selection=JobSelection.model_validate({"parent_job_id": normalized_parent, "sequence_ids": list(normalized_ids)}),
+                status=JobStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+                kind=JobKind.VDJ,
+                parent_job_id=normalized_parent,
+                sequence_ids=normalized_ids,
+            )
+            document.jobs.append(record)
+            try:
+                self._write_document(document)
+            except Exception:
+                try:
+                    directory.rmdir()
                 except OSError:
                     pass
                 raise

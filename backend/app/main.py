@@ -13,6 +13,7 @@ from app.services.job_registry import JobKind, JobStatus, get_job_registry
 from app.services.job_pipeline import schedule_job
 from app.services.realignment import schedule_realignment
 from app.services.clustering import schedule_clustering
+from app.services.vdj import schedule_vdj
 
 
 settings = get_settings()
@@ -35,7 +36,9 @@ async def recover_interrupted_jobs() -> None:
     await asyncio.to_thread(registry.recover_interrupted_running)
     for job in await asyncio.to_thread(registry.list):
         if job.status is JobStatus.QUEUED:
-            if job.kind is JobKind.CLUSTERING:
+            if job.kind is JobKind.VDJ:
+                schedule_vdj(job.id, registry)
+            elif job.kind is JobKind.CLUSTERING:
                 schedule_clustering(job.id, registry)
             elif job.kind is JobKind.REALIGNMENT or job.parent_job_id:
                 schedule_realignment(job.id, registry)

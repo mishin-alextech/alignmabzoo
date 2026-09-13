@@ -82,6 +82,41 @@ export type ClusterResult = {
   order: string[]
 }
 
+export type VdjCall = {
+  gene?: string | null
+  allele?: string | null
+  identity?: number | null
+  score?: number | null
+  evalue?: number | null
+}
+
+export type VdjRecord = {
+  sequence_id: string
+  status: 'ready' | 'unavailable' | 'failed' | 'ambiguous' | string
+  reason?: string | null
+  profile_id?: string | null
+  tool_version?: string | null
+  locus?: string | null
+  v_calls?: Array<VdjCall | string>
+  d_calls?: Array<VdjCall | string>
+  j_calls?: Array<VdjCall | string>
+  junction?: { nt?: string | null; aa?: string | null } | null
+  metrics?: {
+    identity?: number | null
+    alignment_length?: number | null
+    coverage?: number | null
+    score?: number | null
+    evalue?: number | null
+  } | null
+}
+
+export type VdjResult = {
+  version: number
+  parent_job_id?: string | null
+  profile?: { id?: string; version?: string; animal?: string; source?: string } | null
+  records: VdjRecord[]
+}
+
 export type ReportEntry = { path?: string; reason?: string }
 
 export type JobReport = {
@@ -213,6 +248,14 @@ export const api = {
     })
   },
 
+  async vdj(jobId: string, sequenceIds: string[]): Promise<Job> {
+    return request<Job>(`/jobs/${encodeURIComponent(jobId)}/vdj`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sequence_ids: sequenceIds }),
+    })
+  },
+
   async jobs(): Promise<Job[]> {
     const response = await request<{ jobs?: Job[] } | Job[]>('/jobs')
     return Array.isArray(response) ? response : response.jobs ?? []
@@ -266,6 +309,10 @@ export const api = {
     return request<ClusterResult>(`/jobs/${encodeURIComponent(jobId)}/clusters`)
   },
 
+  vdjResults(jobId: string): Promise<VdjResult> {
+    return request<VdjResult>(`/jobs/${encodeURIComponent(jobId)}/vdj-results`)
+  },
+
   report(jobId: string): Promise<JobReport> {
     return request<JobReport>(`/jobs/${encodeURIComponent(jobId)}/report`)
   },
@@ -280,5 +327,13 @@ export const api = {
 
   anarciDownloadUrl(jobId: string, filename: string): string {
     return `/api/jobs/${encodeURIComponent(jobId)}/anarci/${encodeURIComponent(filename)}`
+  },
+
+  vdjTsvDownloadUrl(jobId: string): string {
+    return `/api/jobs/${encodeURIComponent(jobId)}/vdj-results.tsv`
+  },
+
+  vdjManifestDownloadUrl(jobId: string): string {
+    return `/api/jobs/${encodeURIComponent(jobId)}/vdj-manifest`
   },
 }

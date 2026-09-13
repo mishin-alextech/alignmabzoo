@@ -7,6 +7,7 @@ import { JobArchive } from './components/JobArchive'
 import { JobResults } from './components/JobResults'
 import { JobStatus } from './components/JobStatus'
 import { JobWizard } from './components/JobWizard'
+import { VdjResults } from './components/VdjResults'
 
 const activeStatuses = new Set(['queued', 'running'])
 
@@ -72,6 +73,9 @@ function App() {
   }
   if (view === 'clustering' && selectedArchiveJobId) {
     return <ClusteringPlaceholder jobId={selectedArchiveJobId} />
+  }
+  if (view === 'vdj' && selectedArchiveJobId) {
+    return <VdjResults jobId={selectedArchiveJobId} />
   }
 
   return (

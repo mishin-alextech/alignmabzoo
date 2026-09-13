@@ -226,6 +226,8 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<string[]>([])
   const [realigning, setRealigning] = useState(false)
   const [realignError, setRealignError] = useState<string>()
+  const [vdjStarting, setVdjStarting] = useState(false)
+  const [vdjError, setVdjError] = useState<string>()
   const requestVersion = useRef(0)
   const busy = useRef(false)
   const currentJobId = useRef(jobId)
@@ -237,6 +239,8 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     busy.current = false
     setRealigning(false)
     setRealignError(undefined)
+    setVdjStarting(false)
+    setVdjError(undefined)
     setSelectedSourceKeys([])
     dispatch({ type: 'reset', jobId })
     setError(undefined)
@@ -331,6 +335,25 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
     }
   }
 
+  const startVdj = () => {
+    if (!viewer.present || viewer.draftExcludedIds.length === 0 || vdjStarting) return
+    // Открываем окно прямо в обработчике щелчка, иначе браузер посчитает его popup.
+    const target = window.open('', '_blank')
+    setVdjStarting(true)
+    setVdjError(undefined)
+    void api.vdj(viewer.present.jobId, viewer.draftExcludedIds).then(
+      (vdjJob) => {
+        const url = `?view=vdj&job=${encodeURIComponent(vdjJob.id)}`
+        if (target && !target.closed) target.location.replace(url)
+        else window.open(url, '_blank', 'noopener,noreferrer')
+      },
+      (reason) => {
+        target?.close()
+        setVdjError(reason instanceof ApiError ? reason.message : 'Не удалось запустить V(D)J-анализ.')
+      },
+    ).finally(() => setVdjStarting(false))
+  }
+
   if (error) return <Alert severity="warning">{error}</Alert>
   if (viewer.jobId !== jobId || !viewer.present) return <Box textAlign="center" py={3}><CircularProgress size={24} /></Box>
   if (groups.length === 0) return <Typography color="text.secondary">Выравнивания не найдены.</Typography>
@@ -391,6 +414,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
         <Button size="small" variant="outlined" disabled={selectedSourceKeys.length === sourceOptions.length} onClick={excludeUncheckedSources}>Исключить снятые группы</Button>
         <Button size="small" variant="outlined" disabled={!viewer.selected} onClick={() => viewer.selected && dispatch({ type: 'sortCdr3', groupName: viewer.selected.groupName, scheme, direction: 'ascending' })}>Сортировать CDR3</Button>
         <Button size="small" variant="outlined" onClick={openClustering}>Кластеризовать</Button>
+        <Button size="small" variant="outlined" disabled={viewer.draftExcludedIds.length === 0 || vdjStarting} onClick={startVdj}>{vdjStarting ? 'Запуск Germline...' : 'Germline'}</Button>
         <Tooltip title="Повторное выравнивание появится позже">
           <span><Button size="small" variant="outlined" disabled>Кластеризовать и выровнять заново</Button></span>
         </Tooltip>
@@ -411,6 +435,7 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
       </Paper>
       </Box>
       {realignError && <Alert severity="warning">{realignError}</Alert>}
+      {vdjError && <Alert severity="warning">{vdjError}</Alert>}
       {viewer.present.warning && <Alert severity="warning">{viewer.present.warning}</Alert>}
       {groups.map((group) => <AlignmentGroupPanel key={group.name} group={group} scheme={scheme} showCdr={showCdr} showConsensus={showConsensus} showZappo={showZappo} consensusThreshold={consensusThreshold} selectedSequence={viewer.selected?.groupName === group.name ? viewer.selected.sequenceId : null} onSelect={(sequenceId) => dispatch({ type: 'select', selection: { groupName: group.name, sequenceId } })} onMove={(sequenceId, offset) => { if (!realigning) dispatch({ type: 'move', groupName: group.name, sequenceId, offset }) }} excludedIds={viewer.draftExcludedIds} onToggleExclusion={(sequenceId) => dispatch({ type: 'toggleDraftExclusion', sequenceId })} disabled={realigning} fullScreen={fullScreen} onClearSelection={() => dispatch({ type: 'select', selection: null })} onOpenInNewTab={fullScreen ? undefined : () => openGroupInNewTab(group.name)} />)}
       <Typography variant="body2" color="text.secondary">Файлы расчёта текущей версии (порядок до ручной перестановки строк):</Typography>

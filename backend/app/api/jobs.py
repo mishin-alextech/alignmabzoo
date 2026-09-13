@@ -15,6 +15,7 @@ from app.services.discovery import DiscoveryService, get_discovery_service
 from app.services.job_pipeline import SelectionError, schedule_job, validate_selection
 from app.services.realignment import alignment_records, schedule_realignment
 from app.services.clustering import CLUSTER_COVERAGES, CLUSTER_IDENTITIES, schedule_clustering
+from app.services.vdj import schedule_vdj
 from app.services.job_registry import JobNotFoundError, JobRecord, JobRegistry, JobRegistryError, get_job_registry
 
 
@@ -33,6 +34,12 @@ class JobDeleteRequest(BaseModel):
 
 class RealignRequest(BaseModel):
     """Запрос повторного выравнивания по стабильным ID последовательностей."""
+
+    sequence_ids: list[str] = Field(min_length=1)
+
+
+class VdjRequest(BaseModel):
+    """Запрос локального V(D)J-анализа по стабильным ID родительской job."""
 
     sequence_ids: list[str] = Field(min_length=1)
 
@@ -189,6 +196,62 @@ def _create_clustering(job_id: str, request: ClusterRequest, registry: JobRegist
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return job
+
+
+@router.post("/{job_id}/vdj", response_model=JobRecord, status_code=201)
+async def vdj_job(job_id: JobId, request: VdjRequest, registry: RegistryDependency) -> JobRecord:
+    """Создаёт V(D)J-job без пользовательских путей и параметров IgBLAST."""
+
+    job = await asyncio.to_thread(_create_vdj, job_id, request, registry)
+    schedule_vdj(job.id, registry)
+    return job
+
+
+def _create_vdj(job_id: str, request: VdjRequest, registry: JobRegistry) -> JobRecord:
+    """Проверяет, что все выбранные stable ID принадлежат manifest родительской job."""
+
+    try:
+        parent = registry.get(job_id)
+        manifest = json.loads(_text_artifact(registry, job_id, "sequence_manifest.json"))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("sequences"), list):
+            raise ValueError("Manifest родительской job имеет недопустимый формат.")
+        available = {
+            item.get("id") for item in manifest["sequences"]
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        selected_ids = tuple(dict.fromkeys(request.sequence_ids))
+        if not all(item.startswith("seq_") for item in selected_ids):
+            raise JobRegistryError("V(D)J-анализ доступен только по стабильным ID современного результата.")
+        if not set(selected_ids).issubset(available):
+            raise JobRegistryError("Один или несколько sequence_id отсутствуют в manifest родительской job.")
+        return registry.create_vdj(parent.id, selected_ids)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=500, detail="sequence_manifest.json содержит некорректный JSON.") from error
+    except JobRegistryError as error:
+        raise _registry_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/{job_id}/vdj-results")
+def get_vdj_results(job_id: JobId, registry: RegistryDependency) -> JSONResponse:
+    """Возвращает нормализованные результаты V(D)J-анализа."""
+
+    return _json_artifact(registry, job_id, "vdj/result.json")
+
+
+@router.get("/{job_id}/vdj-results.tsv")
+def download_vdj_results(job_id: JobId, registry: RegistryDependency) -> FileResponse:
+    """Скачивает исходный AIRR TSV V(D)J-анализа."""
+
+    return _file_artifact(registry, job_id, "vdj/rearrangements.tsv", "rearrangements.tsv")
+
+
+@router.get("/{job_id}/vdj-manifest")
+def get_vdj_manifest(job_id: JobId, registry: RegistryDependency) -> JSONResponse:
+    """Возвращает manifest входа и зафиксированных профилей V(D)J-анализа."""
+
+    return _json_artifact(registry, job_id, "vdj/manifest.json")
 
 
 @router.get("/{job_id}/alignments")
