@@ -6,6 +6,7 @@ import asyncio
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections import defaultdict
@@ -68,20 +69,22 @@ def _run_vdj_sync(job_id: str, registry: JobRegistry) -> None:
             if shutil.which("igblastn") is None:
                 results.extend(_unavailable(item["id"], "IgBLAST не установлен в образе dev-сервиса.", profile) for item in items)
                 continue
-            rows, command = _run_profile(directory, animal, items, profile)
-            commands.append(command)
-            if command["returncode"] != 0:
-                detail = " ".join(str(command.get("stderr", "")).split())[:500]
+            rows, detailed_reports, profile_commands = _run_profile(directory, animal, items, profile)
+            commands.extend(profile_commands)
+            failed_command = next((command for command in profile_commands if command["returncode"] != 0), None)
+            if failed_command is not None:
+                detail = " ".join(str(failed_command.get("stderr", "")).split())[:500]
                 reason = "IgBLAST завершился с ошибкой" + (f": {detail}" if detail else "")
                 results.extend(_failed(item["id"], reason, profile) for item in items)
                 continue
-            by_id = {item["id"]: item for item in items}
             for item in items:
                 row = rows.get(item["id"])
                 if row is None:
                     results.append(_ambiguous(item["id"], "IgBLAST не вернул строку AIRR для последовательности.", profile))
+                elif item["id"] not in detailed_reports:
+                    results.append(_failed(item["id"], "IgBLAST не вернул подробный отчёт для последовательности.", profile))
                 else:
-                    results.append(_result_from_airr(item["id"], row, profile))
+                    results.append(_result_from_airr(item["id"], row, detailed_reports[item["id"]], profile))
         ordered = _order_results(results, selected)
         _write_result(directory, record.parent_job_id, ordered, commands)
         for item in ordered:
@@ -158,24 +161,60 @@ def _profile_path_safe(value: str) -> bool:
         return False
 
 
-def _run_profile(directory: Path, animal: str, entries: Sequence[Mapping[str, Any]], profile: Mapping[str, Any]) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
+def _run_profile(
+    directory: Path,
+    animal: str,
+    entries: Sequence[Mapping[str, Any]],
+    profile: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, Any]], list[dict[str, Any]]]:
     root = job_child_path(directory, "vdj", animal)
     root.mkdir(parents=True, exist_ok=True)
     query = root / "input.fasta"
     query.write_text("".join(f">{item['id']}\n{_normalise_dna(str(item['nucleotide_sequence']))}\n" for item in entries), encoding="utf-8")
     output = root / "rearrangements.tsv"
-    command = ["igblastn", "-query", str(query), "-organism", str(profile["organism"]), "-germline_db_V", str(profile["v_db"]), "-germline_db_D", str(profile["d_db"]), "-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-outfmt", "19", "-out", str(output), "-num_threads", "1"]
+    detailed_output = root / "igblast_report.txt"
+    common = ["igblastn", "-query", str(query), "-organism", str(profile["organism"]), "-germline_db_V", str(profile["v_db"]), "-germline_db_D", str(profile["d_db"]), "-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-num_threads", "1"]
+    airr_command = [*common, "-outfmt", "19", "-out", str(output)]
+    detailed_command = [*common, "-show_translation", "-outfmt", "3", "-out", str(detailed_output)]
     environment = {**os.environ, "IGDATA": str(profile["igdata"])}
-    completed = subprocess.run(command, cwd=root, env=environment, check=False, capture_output=True, text=True)
-    metadata = {"animal": animal, "profile_id": profile["id"], "argv": command, "returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
-    _log(directory, f"IgBLAST {animal}: код {completed.returncode}.")
-    if completed.stdout:
-        _log(directory, f"IgBLAST {animal} stdout:\n{completed.stdout}")
-    if completed.stderr:
-        _log(directory, f"IgBLAST {animal} stderr:\n{completed.stderr}")
-    rows = _read_airr(output) if completed.returncode == 0 else {}
+    airr_completed = subprocess.run(airr_command, cwd=root, env=environment, check=False, capture_output=True, text=True)
+    commands = [_command_metadata(animal, profile, "airr", airr_command, airr_completed)]
+    _log_command(directory, commands[-1])
+    if airr_completed.returncode != 0:
+        return {}, {}, commands
+    detailed_completed = subprocess.run(detailed_command, cwd=root, env=environment, check=False, capture_output=True, text=True)
+    commands.append(_command_metadata(animal, profile, "detailed", detailed_command, detailed_completed))
+    _log_command(directory, commands[-1])
+    rows = _read_airr(output)
     _append_tsv(directory, output, animal)
-    return rows, metadata
+    if detailed_completed.returncode != 0:
+        return rows, {}, commands
+    try:
+        detailed_reports = _read_detailed_reports(detailed_output)
+    except ValueError as error:
+        commands[-1]["parse_error"] = str(error)
+        _log(directory, str(error))
+        detailed_reports = {}
+    return rows, detailed_reports, commands
+
+
+def _command_metadata(
+    animal: str,
+    profile: Mapping[str, Any],
+    output_format: str,
+    command: Sequence[str],
+    completed: subprocess.CompletedProcess[str],
+) -> dict[str, Any]:
+    return {"animal": animal, "profile_id": profile["id"], "output_format": output_format, "argv": list(command), "returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
+
+
+def _log_command(directory: Path, command: Mapping[str, Any]) -> None:
+    label = "AIRR" if command["output_format"] == "airr" else "подробный отчёт"
+    _log(directory, f"IgBLAST {command['animal']} ({label}): код {command['returncode']}.")
+    if command.get("stdout"):
+        _log(directory, f"IgBLAST {command['animal']} stdout:\n{command['stdout']}")
+    if command.get("stderr"):
+        _log(directory, f"IgBLAST {command['animal']} stderr:\n{command['stderr']}")
 
 
 def _read_airr(path: Path) -> dict[str, dict[str, str]]:
@@ -195,6 +234,56 @@ def _read_airr(path: Path) -> dict[str, dict[str, str]]:
     return result
 
 
+_QUERY_REPORT = re.compile(r"(?m)^Query=\s+(\S+)\s*$")
+
+
+def _read_detailed_reports(path: Path) -> dict[str, dict[str, Any]]:
+    """Разделяет стандартный отчёт IgBLAST и сохраняет четыре блока viewer."""
+
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("IgBLAST не создал подробный текстовый отчёт.")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("Не удалось прочитать подробный отчёт IgBLAST.") from error
+    matches = list(_QUERY_REPORT.finditer(text))
+    if not matches:
+        raise ValueError("Подробный отчёт IgBLAST не содержит блоков Query.")
+    reports: dict[str, dict[str, Any]] = {}
+    for index, match in enumerate(matches):
+        sequence_id = match.group(1)
+        if sequence_id in reports:
+            raise ValueError("Подробный отчёт IgBLAST содержит повторяющийся Query ID.")
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        block = text[match.start():end].strip()
+        reports[sequence_id] = _detailed_sections(block)
+    return reports
+
+
+def _detailed_sections(block: str) -> dict[str, Any]:
+    length_match = re.search(r"(?m)^Length=(\d+)\s*$", block)
+    return {
+        "query_length": int(length_match.group(1)) if length_match else None,
+        "significant_alignments": _report_section(block, "Sequences producing significant alignments:", ("Domain classification requested:", "V-(D)-J rearrangement summary")),
+        "junction_details": _report_section(block, "V-(D)-J junction details based on top germline gene matches:", ("Alignment summary between query and top germline V gene hit:", "Alignments")),
+        "alignment_summary": _report_section(block, "Alignment summary between query and top germline V gene hit:", ("Alignments",)),
+        "alignments": _report_section(block, "Alignments", ("Lambda      K", "Effective search space used:")),
+    }
+
+
+def _report_section(block: str, marker: str, end_markers: Sequence[str]) -> str | None:
+    start = block.find(marker)
+    if start < 0:
+        return None
+    end = len(block)
+    for end_marker in end_markers:
+        position = block.find(end_marker, start + len(marker))
+        if position >= 0:
+            end = min(end, position)
+    value = block[start + len(marker):end].strip()
+    return value or None
+
+
 def _append_tsv(directory: Path, source: Path, animal: str) -> None:
     target = job_child_path(directory, "vdj", "rearrangements.tsv")
     if not source.is_file():
@@ -209,8 +298,8 @@ def _append_tsv(directory: Path, source: Path, animal: str) -> None:
             stream.write("\n".join(lines[1:]) + "\n")
 
 
-def _result_from_airr(sequence_id: str, row: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str, Any]:
-    return {"sequence_id": sequence_id, "status": "ready", "reason": None, "profile_id": profile["id"], "profile_version": profile["version"], "tool_version": None, "v_calls": _calls(row.get("v_call")), "d_calls": _calls(row.get("d_call")), "j_calls": _calls(row.get("j_call")), "locus": _none(row.get("locus")), "junction": {"nt": _none(row.get("junction")), "aa": _none(row.get("junction_aa"))}, "metrics": {"identity": _number(row.get("v_identity") or row.get("v_identity_aa")), "alignment_length": _number(row.get("v_alignment_length")), "coverage": _number(row.get("v_support")), "score": _number(row.get("v_score")), "evalue": _number(row.get("v_evalue"))}}
+def _result_from_airr(sequence_id: str, row: Mapping[str, str], details: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
+    return {"sequence_id": sequence_id, "status": "ready", "reason": None, "profile_id": profile["id"], "profile_version": profile["version"], "tool_version": None, "v_calls": _calls(row.get("v_call")), "d_calls": _calls(row.get("d_call")), "j_calls": _calls(row.get("j_call")), "locus": _none(row.get("locus")), "junction": {"nt": _none(row.get("junction")), "aa": _none(row.get("junction_aa"))}, "metrics": {"identity": _number(row.get("v_identity") or row.get("v_identity_aa")), "alignment_length": _number(row.get("v_alignment_length")), "coverage": _number(row.get("v_support")), "score": _number(row.get("v_score")), "evalue": _number(row.get("v_evalue"))}, "details": dict(details)}
 
 
 def _unavailable(sequence_id: str, reason: str, profile: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -226,13 +315,13 @@ def _ambiguous(sequence_id: str, reason: str, profile: Mapping[str, Any]) -> dic
 
 
 def _empty_result(sequence_id: str, status: str, reason: str, profile: Mapping[str, Any] | None) -> dict[str, Any]:
-    return {"sequence_id": sequence_id, "status": status, "reason": reason, "profile_id": profile.get("id") if profile else None, "profile_version": profile.get("version") if profile else None, "tool_version": None, "v_calls": [], "d_calls": [], "j_calls": [], "locus": None, "junction": {"nt": None, "aa": None}, "metrics": {"identity": None, "alignment_length": None, "coverage": None, "score": None, "evalue": None}}
+    return {"sequence_id": sequence_id, "status": status, "reason": reason, "profile_id": profile.get("id") if profile else None, "profile_version": profile.get("version") if profile else None, "tool_version": None, "v_calls": [], "d_calls": [], "j_calls": [], "locus": None, "junction": {"nt": None, "aa": None}, "metrics": {"identity": None, "alignment_length": None, "coverage": None, "score": None, "evalue": None}, "details": {"query_length": None, "significant_alignments": None, "junction_details": None, "alignment_summary": None, "alignments": None}}
 
 
 def _write_result(directory: Path, parent_job_id: str | None, records: Sequence[Mapping[str, Any]], commands: Sequence[Mapping[str, Any]]) -> None:
     profiles = sorted({(item.get("profile_id"), item.get("profile_version")) for item in records if item.get("profile_id")})
     profile_rows = [{"id": profile_id, "version": version, "source": "IMGT"} for profile_id, version in profiles]
-    _write_json(job_child_path(directory, "vdj", "result.json"), {"version": 1, "parent_job_id": parent_job_id, "source": "IMGT", "profile": profile_rows[0] if len(profile_rows) == 1 else None, "profiles": profile_rows, "records": list(records), "commands": list(commands)})
+    _write_json(job_child_path(directory, "vdj", "result.json"), {"version": 2, "parent_job_id": parent_job_id, "source": "IMGT", "profile": profile_rows[0] if len(profile_rows) == 1 else None, "profiles": profile_rows, "records": list(records), "commands": list(commands)})
     _write_json(job_child_path(directory, "vdj", "manifest.json"), {"version": 1, "parent_job_id": parent_job_id, "profiles_root": str(PROFILE_ROOT), "source": "IMGT", "profiles": profile_rows, "sequence_ids": [item["sequence_id"] for item in records]})
 
 

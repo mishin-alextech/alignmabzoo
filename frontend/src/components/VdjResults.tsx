@@ -31,24 +31,55 @@ function Calls({ label, calls }: { label: string; calls?: Array<VdjCall | string
   return <Typography variant="body2"><strong>{label}:</strong> {calls.map(callLabel).join(', ')}</Typography>
 }
 
-function RecordDetails({ record }: { record: VdjRecord }) {
+function ReportBlock({ title, text }: { title: string; text?: string | null }) {
+  return (
+    <Box>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{title}</Typography>
+      {text ? (
+        <Box
+          component="pre"
+          sx={{ bgcolor: 'grey.50', border: 1, borderColor: 'divider', borderRadius: 1, fontFamily: 'monospace', fontSize: '0.78rem', lineHeight: 1.45, m: 0, overflowX: 'auto', p: 1.5, whiteSpace: 'pre' }}
+        >
+          {text}
+        </Box>
+      ) : <Typography variant="body2" color="text.secondary">Данные не определены.</Typography>}
+    </Box>
+  )
+}
+
+function RecordDetails({ record, cloneName }: { record: VdjRecord; cloneName: string }) {
   if (record.status === 'unavailable' || record.status === 'failed') {
     return <Typography color="text.secondary">{record.reason || 'Причина не указана.'}</Typography>
   }
   const metrics = record.metrics
+  const details = record.details
   return (
-    <Stack spacing={0.5}>
+    <Stack spacing={2}>
       {record.reason && <Alert severity="info">{record.reason}</Alert>}
-      <Calls label="V" calls={record.v_calls} />
-      <Calls label="D" calls={record.d_calls} />
-      <Calls label="J" calls={record.j_calls} />
-      <Typography variant="body2"><strong>Локус:</strong> {record.locus || '—'}</Typography>
-      <Typography variant="body2"><strong>Junction, нуклеотиды:</strong> {record.junction?.nt || '—'}</Typography>
-      <Typography variant="body2"><strong>Junction, аминокислоты:</strong> {record.junction?.aa || '—'}</Typography>
-      <Typography variant="body2"><strong>Идентичность:</strong> {metric(metrics?.identity)} · <strong>Покрытие:</strong> {metric(metrics?.coverage)} · <strong>Длина:</strong> {metrics?.alignment_length ?? '—'}</Typography>
-      <Typography variant="body2"><strong>Score:</strong> {metric(metrics?.score)} · <strong>E-value:</strong> {metric(metrics?.evalue)}</Typography>
-      {record.profile_id && <Typography variant="body2"><strong>Профиль:</strong> {record.profile_id}</Typography>}
-      {record.tool_version && <Typography variant="body2"><strong>IgBLAST:</strong> {record.tool_version}</Typography>}
+      <Box>
+        <Typography variant="subtitle2">Query= {cloneName} &nbsp; Length={details?.query_length ?? '—'}</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          V: {(record.v_calls ?? []).map(callLabel).join(', ') || '—'} · D: {(record.d_calls ?? []).map(callLabel).join(', ') || '—'} · J: {(record.j_calls ?? []).map(callLabel).join(', ') || '—'} · Score: {metric(metrics?.score)} · E-value: {metric(metrics?.evalue)}
+        </Typography>
+      </Box>
+      <ReportBlock title="Sequences producing significant alignments" text={details?.significant_alignments} />
+      <ReportBlock title="V-(D)-J junction details based on top germline gene matches" text={details?.junction_details} />
+      <Box>
+        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Краткий результат</Typography>
+        <Stack spacing={0.25}>
+          <Calls label="V" calls={record.v_calls} />
+          <Calls label="D" calls={record.d_calls} />
+          <Calls label="J" calls={record.j_calls} />
+          <Typography variant="body2"><strong>Локус:</strong> {record.locus || '—'}</Typography>
+          <Typography variant="body2"><strong>Junction, нуклеотиды:</strong> {record.junction?.nt || '—'}</Typography>
+          <Typography variant="body2"><strong>Junction, аминокислоты:</strong> {record.junction?.aa || '—'}</Typography>
+          <Typography variant="body2"><strong>Идентичность:</strong> {metric(metrics?.identity)} · <strong>Покрытие:</strong> {metric(metrics?.coverage)} · <strong>Длина:</strong> {metrics?.alignment_length ?? '—'}</Typography>
+          {record.profile_id && <Typography variant="body2"><strong>Профиль:</strong> {record.profile_id}</Typography>}
+          {record.tool_version && <Typography variant="body2"><strong>IgBLAST:</strong> {record.tool_version}</Typography>}
+        </Stack>
+      </Box>
+      <ReportBlock title="Alignment summary between query and top germline V gene hit" text={details?.alignment_summary} />
+      <ReportBlock title="Alignments" text={details?.alignments} />
     </Stack>
   )
 }
@@ -127,7 +158,7 @@ export function VdjResults({ jobId }: Props) {
                           <Typography>{recordStatus(record.status)}</Typography>
                         </Box>
                       </AccordionSummary>
-                      <AccordionDetails><RecordDetails record={record} /></AccordionDetails>
+                      <AccordionDetails><RecordDetails record={record} cloneName={sourceLabel(sequence)} /></AccordionDetails>
                     </Accordion>
                   </TableCell>
                 </TableRow>

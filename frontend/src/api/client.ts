@@ -108,6 +108,13 @@ export type VdjRecord = {
     score?: number | null
     evalue?: number | null
   } | null
+  details?: {
+    query_length?: number | null
+    significant_alignments?: string | null
+    junction_details?: string | null
+    alignment_summary?: string | null
+    alignments?: string | null
+  } | null
 }
 
 export type VdjResult = {
