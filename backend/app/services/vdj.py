@@ -215,7 +215,12 @@ def _run_profile(
     common.extend(("-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-num_threads", "1"))
     airr_command = [*common, "-outfmt", "19", "-out", str(output)]
     detailed_command = [*common, "-show_translation", "-outfmt", "3", "-out", str(detailed_output)]
-    environment = {**os.environ, "IGDATA": str(profile["igdata"])}
+    # IgBLAST всё равно открывает встроенную базу аннотаций организма (по
+    # умолчанию human_V) до применения -custom_internal_data. Поэтому для
+    # собственных аннотаций оставляем IGDATA на полном дереве поставки IgBLAST,
+    # а профильный .ndm.imgt передаём отдельным абсолютным путём.
+    igdata = IGBLAST_ROOT if isinstance(custom_internal_data, str) and custom_internal_data else profile["igdata"]
+    environment = {**os.environ, "IGDATA": str(igdata)}
     airr_completed = subprocess.run(airr_command, cwd=root, env=environment, check=False, capture_output=True, text=True)
     commands = [_command_metadata(animal, profile, "airr", airr_command, airr_completed)]
     _log_command(directory, commands[-1])

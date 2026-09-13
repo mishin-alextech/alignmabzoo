@@ -111,7 +111,7 @@ export function ClusteringPlaceholder({ jobId, sequenceIds, onBack, onApplyOrder
       <Paper variant="outlined" sx={{ maxWidth: 860, mx: 'auto', p: { xs: 2, sm: 4 } }}>
         <Stack spacing={2}>
           <Typography component="h1" variant="h4">Кластеризация</Typography>
-          <Typography color="text.secondary">MMseqs2 группирует сохранённые последовательности. Инженерные пороги не являются биологическим выводом.</Typography>
+          <Typography color="text.secondary">MMseqs2 группирует сохранённые последовательности.</Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <FormControl fullWidth size="small">
               <InputLabel id="cluster-scope-label">Область сравнения</InputLabel>

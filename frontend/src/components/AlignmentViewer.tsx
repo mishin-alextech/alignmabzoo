@@ -1,4 +1,4 @@
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, FormControl, IconButton, InputLabel, MenuItem, Paper, Select, Stack, SvgIcon, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
+import { Alert, Box, Button, ButtonGroup, Checkbox, CircularProgress, FormControl, IconButton, InputLabel, MenuItem, Paper, Select, Stack, SvgIcon, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ApiError, api, type AlignmentGroup, type AlignmentResponse, type AlignmentSequence, type CdrScheme } from '../api/client'
 import { calculateColumnStatistics, formatResidueFrequency, type ColumnStatistics } from './alignment/columnStatistics'
@@ -379,14 +379,6 @@ export function AlignmentViewer({ jobId, fullScreen = false, groupName }: Props)
             <Checkbox checked={showZappo} size="small" inputProps={{ 'aria-label': 'Показывать цвета Zappo' }} onChange={(event) => setShowZappo(event.target.checked)} />
           </Paper>
           <Typography variant="body2" color="text.secondary">CDR имеют приоритет над консенсусом и цветами Zappo. Нажмите на строку, чтобы выделить последовательность.</Typography>
-          <Accordion variant="outlined" disableGutters>
-            <AccordionSummary expandIcon={<span aria-hidden="true">⌄</span>} aria-controls="additional-options-content" id="additional-options-header">
-              <Typography>Дополнительные параметры</Typography>
-            </AccordionSummary>
-            <AccordionDetails id="additional-options-content">
-              <Typography color="text.secondary">Параметры будут добавлены позже.</Typography>
-            </AccordionDetails>
-          </Accordion>
         </Stack>
       ) : (
         <ButtonGroup size="small" aria-label="Схема нумерации CDR">
