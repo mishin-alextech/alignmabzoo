@@ -1,0 +1,10 @@
+{
+  "id": "gt-imgt-202631-1-light",
+  "version": "202631-1",
+  "chain_groups": ["VKappa", "VLambda"],
+  "custom_internal_data": "/opt/igblast/profiles/gt/igdata/internal_data/gt/gt.ndm.imgt",
+  "v_db": "/opt/igblast/profiles/gt/databases/imgt_gt_v",
+  "j_db": "/opt/igblast/profiles/gt/databases/imgt_gt_j",
+  "auxiliary_data": "/opt/igblast/profiles/gt/igdata/optional_file/gt_gl.aux",
+  "igdata": "/opt/igblast/profiles/gt/igdata"
+}

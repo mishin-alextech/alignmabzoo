@@ -9,6 +9,10 @@
     {"id": "hu", "animal": "Hu", "taxon": "Homo sapiens", "organism": "human"},
     {"id": "ms", "animal": "Ms", "taxon": "Mus musculus", "organism": "mouse"},
     {"id": "rb", "animal": "Rb", "taxon": "Oryctolagus cuniculus", "organism": "rabbit"},
-    {"id": "rt", "animal": "Rt", "taxon": "Rattus norvegicus", "organism": "rat"}
+    {"id": "rt", "animal": "Rt", "taxon": "Rattus norvegicus", "organism": "rat"},
+    {"id": "pg", "animal": "Pg", "taxon": "Sus scrofa", "custom_internal_data": true},
+    {"id": "ov", "animal": "Ov", "taxon": "Ovis aries", "custom_internal_data": true},
+    {"id": "gt", "animal": "Gt", "taxon": "Capra hircus", "custom_internal_data": true, "chain_groups": ["VKappa", "VLambda"]},
+    {"id": "bv", "animal": "Bv", "taxon": "Bos taurus", "custom_internal_data": true}
   ]
 }

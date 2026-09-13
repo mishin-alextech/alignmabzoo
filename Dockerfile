@@ -74,6 +74,11 @@ RUN apt-get update \
 COPY --from=mmseqs-builder /opt/mmseqs2/ /opt/mmseqs2/
 COPY --from=mmseqs-builder /build/mmseqs2-revision /usr/local/share/mmseqs2-revision
 
+# Backend устанавливается до подготовки custom-профилей: утилитам разметки
+# IMGT нужны Biopython и тот же Python 3.12, который используется приложением.
+COPY backend/ /build/backend/
+RUN pip install --no-cache-dir /build/backend
+
 # IgBLAST 1.22.0 и IMGT/V-QUEST 202631-1 поставляются как зафиксированные
 # исходные архивы. FASTA без IMGT-gap и BLAST-индексы создаются внутри Linux-
 # образа официальными edit_imgt_file.pl и makeblastdb.
@@ -82,10 +87,13 @@ RUN set -eu; \
     if [ "$IGBLAST_REQUIRED" = "1" ]; then \
         test -f /tmp/igblast-source/igblast.sha256; \
         test -f /tmp/igblast-source/imgt.sha256; \
+        test -f /tmp/igblast-source/tools.sha256; \
         set -- /tmp/igblast-source/dist/*.tar.gz; \
         test -f "$1" && test "$#" -eq 1; \
         (cd /tmp/igblast-source && sha256sum --check igblast.sha256); \
         (cd /tmp/igblast-source && sha256sum --check imgt.sha256); \
+        (cd /tmp/igblast-source && sha256sum --check tools.sha256); \
+        pip install --no-cache-dir --no-deps /tmp/igblast-source/tools/receptor_utils-0.0.67-py3-none-any.whl; \
         mkdir -p /tmp/igblast-unpack /opt/igblast/bin /opt/igblast/profiles; \
         tar -xzf "$1" -C /tmp/igblast-unpack; \
         package_root="$(dirname "$(dirname "$(find /tmp/igblast-unpack -type f -name igblastn -print -quit)")")"; \
@@ -127,6 +135,62 @@ RUN set -eu; \
             test -s "$igdata_root/internal_data/$organism/${organism}.ndm.imgt"; \
             test -s "$igdata_root/optional_file/${organism}_gl.aux"; \
         done; \
+        for specification in \
+            'pg:Sus_scrofa' \
+            'ov:Ovis_aries' \
+            'bv:Bos_taurus'; do \
+            profile="${specification%%:*}"; species="${specification#*:}"; \
+            source_root="/tmp/imgt/IMGT_V-QUEST_reference_directory/$species/IG"; \
+            profile_root="/opt/igblast/profiles/$profile"; \
+            database_root="$profile_root/databases"; \
+            igdata_root="$profile_root/igdata"; \
+            test -f "$profile_root/profile.json"; \
+            mkdir -p "$database_root/source" "$igdata_root/internal_data/$profile" "$igdata_root/optional_file"; \
+            for segment in IGHV IGHD IGHJ IGKV IGKJ IGLV IGLJ; do \
+                test -s "$source_root/$segment.fasta"; \
+                cp "$source_root/$segment.fasta" "$database_root/source/$segment.fasta"; \
+            done; \
+            cat "$source_root/IGHV.fasta" "$source_root/IGKV.fasta" "$source_root/IGLV.fasta" > "$database_root/imgt_${profile}_v.raw.fasta"; \
+            cat "$source_root/IGHJ.fasta" "$source_root/IGKJ.fasta" "$source_root/IGLJ.fasta" > "$database_root/imgt_${profile}_j.raw.fasta"; \
+            cp "$source_root/IGHD.fasta" "$database_root/imgt_${profile}_d.raw.fasta"; \
+            for region in v d j; do \
+                perl /opt/igblast/bin/edit_imgt_file.pl "$database_root/imgt_${profile}_${region}.raw.fasta" > "$database_root/imgt_${profile}_${region}.fasta"; \
+                makeblastdb -parse_seqids -dbtype nucl -in "$database_root/imgt_${profile}_${region}.fasta" -out "$database_root/imgt_${profile}_${region}"; \
+            done; \
+            for chain in H K L; do \
+                python /tmp/igblast-source/prepare_imgt_fasta.py "$database_root/imgt_${profile}_${chain}_v.gapped.fasta" "$source_root/IG${chain}V.fasta"; \
+                make_igblast_ndm "$database_root/imgt_${profile}_${chain}_v.gapped.fasta" "V${chain}" "$igdata_root/internal_data/$profile/${profile}_${chain}.ndm.imgt"; \
+            done; \
+            cat "$igdata_root/internal_data/$profile/${profile}_H.ndm.imgt" "$igdata_root/internal_data/$profile/${profile}_K.ndm.imgt" "$igdata_root/internal_data/$profile/${profile}_L.ndm.imgt" > "$igdata_root/internal_data/$profile/${profile}.ndm.imgt"; \
+            annotate_j "$database_root/imgt_${profile}_j.fasta" "$igdata_root/optional_file/${profile}_gl.aux"; \
+            test -s "$igdata_root/internal_data/$profile/${profile}.ndm.imgt"; \
+            test -s "$igdata_root/optional_file/${profile}_gl.aux"; \
+        done; \
+        profile='gt'; species='Capra_hircus'; \
+        source_root="/tmp/imgt/IMGT_V-QUEST_reference_directory/$species/IG"; \
+        profile_root="/opt/igblast/profiles/$profile"; \
+        database_root="$profile_root/databases"; \
+        igdata_root="$profile_root/igdata"; \
+        test -f "$profile_root/profile.json"; \
+        mkdir -p "$database_root/source" "$igdata_root/internal_data/$profile" "$igdata_root/optional_file"; \
+        for segment in IGKV IGKJ IGLV IGLJ; do \
+            test -s "$source_root/$segment.fasta"; \
+            cp "$source_root/$segment.fasta" "$database_root/source/$segment.fasta"; \
+        done; \
+        cat "$source_root/IGKV.fasta" "$source_root/IGLV.fasta" > "$database_root/imgt_${profile}_v.raw.fasta"; \
+        cat "$source_root/IGKJ.fasta" "$source_root/IGLJ.fasta" > "$database_root/imgt_${profile}_j.raw.fasta"; \
+        for region in v j; do \
+            perl /opt/igblast/bin/edit_imgt_file.pl "$database_root/imgt_${profile}_${region}.raw.fasta" > "$database_root/imgt_${profile}_${region}.fasta"; \
+            makeblastdb -parse_seqids -dbtype nucl -in "$database_root/imgt_${profile}_${region}.fasta" -out "$database_root/imgt_${profile}_${region}"; \
+        done; \
+        for chain in K L; do \
+            python /tmp/igblast-source/prepare_imgt_fasta.py "$database_root/imgt_${profile}_${chain}_v.gapped.fasta" "$source_root/IG${chain}V.fasta"; \
+            make_igblast_ndm "$database_root/imgt_${profile}_${chain}_v.gapped.fasta" "V${chain}" "$igdata_root/internal_data/$profile/${profile}_${chain}.ndm.imgt"; \
+        done; \
+        cat "$igdata_root/internal_data/$profile/${profile}_K.ndm.imgt" "$igdata_root/internal_data/$profile/${profile}_L.ndm.imgt" > "$igdata_root/internal_data/$profile/${profile}.ndm.imgt"; \
+        annotate_j "$database_root/imgt_${profile}_j.fasta" "$igdata_root/optional_file/${profile}_gl.aux"; \
+        test -s "$igdata_root/internal_data/$profile/${profile}.ndm.imgt"; \
+        test -s "$igdata_root/optional_file/${profile}_gl.aux"; \
         (cd /opt/igblast/profiles && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS); \
         (cd /opt/igblast/profiles && sha256sum --check SHA256SUMS); \
         chmod -R a-w /opt/igblast; \
@@ -140,10 +204,6 @@ RUN set -eu; \
         chmod -R a-w /opt/igblast; \
     fi; \
     rm -rf /tmp/igblast-source /tmp/igblast-unpack
-
-# Backend — устанавливаемый Python-пакет с ASGI-приложением app.main:app.
-COPY backend/ /build/backend/
-RUN pip install --no-cache-dir /build/backend
 
 # ANARCI — локальная проверенная поставка. setup.py проекта скачивает
 # germline-данные из сети, поэтому его намеренно не запускаем: копируем уже

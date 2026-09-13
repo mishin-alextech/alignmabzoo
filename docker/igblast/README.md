@@ -7,8 +7,10 @@ Dev-образ содержит зафиксированные исходные 
 - IMGT/V-QUEST reference directory release `202631-1` от 27 июля 2026 года:
   `https://www.imgt.org/download/V-QUEST/IMGT_V-QUEST_reference_directory.zip`.
 
-Контрольные суммы находятся в `igblast.sha256` и `imgt.sha256`. Docker build
-проверяет их до распаковки. IMGT предоставляет данные по CC BY 4.0; лицензия
+Контрольные суммы находятся в `igblast.sha256`, `imgt.sha256` и `tools.sha256`.
+Последний фиксирует wheel receptor-utils `0.0.67`, используемый только для
+построения custom-разметки. Docker build проверяет их до распаковки. IMGT
+предоставляет данные по CC BY 4.0; лицензия
 NCBI включена в архив IgBLAST и копируется в `/opt/igblast/NCBI-LICENSE`.
 
 ## Что создаётся при сборке
@@ -23,6 +25,13 @@ IGKV/IGKJ и IGLV/IGLJ из IMGT. Исходные FASTA сохраняются 
 `internal_data`, файл `<organism>_gl.aux` и `.ndm.imgt`. Итоговая структура
 внутри контейнера:
 
+Для `pg`, `ov` и `bv` те же V/D/J FASTA и индексы строятся из собственных
+наборов IMGT. Поскольку эти виды не входят во встроенный список IgBLAST,
+`.ndm.imgt` и `.aux` создаются из IMGT-gapped V и J FASTA. Backend передаёт
+такой профиль через `-custom_internal_data`, без подмены другим организмом.
+Для `gt` тем же способом строится частичный профиль K/L; тяжёлые цепи явно
+помечаются недоступными.
+
 ```text
 /opt/igblast/
 ├── bin/{igblastn,makeblastdb,edit_imgt_file.pl}
@@ -34,7 +43,11 @@ IGKV/IGKJ и IGLV/IGLJ из IMGT. Исходные FASTA сохраняются 
     ├── hu/{profile.json,databases/,igdata/}
     ├── ms/{profile.json,databases/,igdata/}
     ├── rb/{profile.json,databases/,igdata/}
-    └── rt/{profile.json,databases/,igdata/}
+    ├── rt/{profile.json,databases/,igdata/}
+    ├── pg/{profile.json,databases/,igdata/}
+    ├── ov/{profile.json,databases/,igdata/}
+    ├── gt/{profile.json,databases/,igdata/}
+    └── bv/{profile.json,databases/,igdata/}
 ```
 
 `SHA256SUMS` для всех файлов готовых профилей создаётся и сразу проверяется
@@ -64,3 +77,5 @@ docker compose -p dev-alignmabzoo exec dev-alignmabzoo \
 `unavailable` без запуска процесса.
 
 Подмена профиля близким видом и использование `igblastn -remote` запрещены.
+В релизе IMGT `202631-1` для точных таксонов `Hs` и `Cm` наборов нет. Эти два
+кода пока возвращают явный статус недоступности.

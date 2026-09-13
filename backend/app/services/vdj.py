@@ -19,7 +19,7 @@ from app.services.job_registry import JobCounts, JobRegistry, JobStatus, retain_
 
 PROFILE_ROOT = Path("/opt/igblast/profiles")
 IGBLAST_ROOT = Path("/opt/igblast")
-SUPPORTED_ANIMALS = frozenset({"Hu", "Ms", "Rb", "Rt"})
+SUPPORTED_ANIMALS = frozenset({"Hu", "Ms", "Rb", "Rt", "Pg", "Ov", "Gt", "Bv"})
 
 
 def schedule_vdj(job_id: str, registry: JobRegistry) -> asyncio.Task[None]:
@@ -57,7 +57,7 @@ def _run_vdj_sync(job_id: str, registry: JobRegistry) -> None:
         for item in candidates:
             animal = item.get("animal")
             if not isinstance(animal, str) or animal not in SUPPORTED_ANIMALS:
-                results.append(_unavailable(item["id"], "Для животного нет профиля V(D)J первого выпуска."))
+                results.append(_unavailable(item["id"], "Для животного пока нет готового собственного профиля IMGT."))
                 continue
             grouped[animal].append(item)
         commands: list[dict[str, Any]] = []
@@ -69,15 +69,27 @@ def _run_vdj_sync(job_id: str, registry: JobRegistry) -> None:
             if shutil.which("igblastn") is None:
                 results.extend(_unavailable(item["id"], "IgBLAST не установлен в образе dev-сервиса.", profile) for item in items)
                 continue
-            rows, detailed_reports, profile_commands = _run_profile(directory, animal, items, profile)
+            supported_chain_groups = profile.get("chain_groups")
+            profile_items = items
+            if isinstance(supported_chain_groups, list):
+                supported = set(supported_chain_groups)
+                profile_items = [item for item in items if item.get("chain_group") in supported]
+                results.extend(
+                    _unavailable(item["id"], "Профиль IMGT не содержит базу для этого типа цепи.", profile)
+                    for item in items
+                    if item.get("chain_group") not in supported
+                )
+            if not profile_items:
+                continue
+            rows, detailed_reports, profile_commands = _run_profile(directory, animal, profile_items, profile)
             commands.extend(profile_commands)
             failed_command = next((command for command in profile_commands if command["returncode"] != 0), None)
             if failed_command is not None:
                 detail = " ".join(str(failed_command.get("stderr", "")).split())[:500]
                 reason = "IgBLAST завершился с ошибкой" + (f": {detail}" if detail else "")
-                results.extend(_failed(item["id"], reason, profile) for item in items)
+                results.extend(_failed(item["id"], reason, profile) for item in profile_items)
                 continue
-            for item in items:
+            for item in profile_items:
                 row = rows.get(item["id"])
                 if row is None:
                     results.append(_ambiguous(item["id"], "IgBLAST не вернул строку AIRR для последовательности.", profile))
@@ -146,10 +158,28 @@ def _load_profile(animal: str) -> tuple[dict[str, Any] | None, str]:
         return None, "Профиль IMGT повреждён или недоступен."
     if not isinstance(profile, dict):
         return None, "Профиль IMGT имеет недопустимый формат."
-    required = ("id", "version", "organism", "v_db", "d_db", "j_db", "auxiliary_data", "igdata")
+    required = ("id", "version", "v_db", "j_db", "auxiliary_data", "igdata")
     if not all(isinstance(profile.get(key), str) and profile[key] for key in required):
         return None, "Профиль IMGT не содержит обязательные параметры IgBLAST."
-    if not all(_profile_path_safe(profile[key]) for key in ("v_db", "d_db", "j_db", "auxiliary_data", "igdata")):
+    organism = profile.get("organism")
+    custom_internal_data = profile.get("custom_internal_data")
+    if not (isinstance(organism, str) and organism) and not (
+        isinstance(custom_internal_data, str) and custom_internal_data
+    ):
+        return None, "Профиль IMGT не задаёт системную или собственную разметку IgBLAST."
+    chain_groups = profile.get("chain_groups")
+    if chain_groups is not None and (
+        not isinstance(chain_groups, list)
+        or not chain_groups
+        or not all(item in {"VHeavy", "VHH", "VKappa", "VLambda"} for item in chain_groups)
+    ):
+        return None, "Профиль IMGT содержит недопустимый список типов цепей."
+    path_keys = ["v_db", "j_db", "auxiliary_data", "igdata"]
+    if isinstance(profile.get("d_db"), str) and profile["d_db"]:
+        path_keys.append("d_db")
+    if isinstance(custom_internal_data, str) and custom_internal_data:
+        path_keys.append("custom_internal_data")
+    if not all(_profile_path_safe(profile[key]) for key in path_keys):
         return None, "Профиль IMGT содержит небезопасный путь к базе."
     return profile, ""
 
@@ -173,7 +203,16 @@ def _run_profile(
     query.write_text("".join(f">{item['id']}\n{_normalise_dna(str(item['nucleotide_sequence']))}\n" for item in entries), encoding="utf-8")
     output = root / "rearrangements.tsv"
     detailed_output = root / "igblast_report.txt"
-    common = ["igblastn", "-query", str(query), "-organism", str(profile["organism"]), "-germline_db_V", str(profile["v_db"]), "-germline_db_D", str(profile["d_db"]), "-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-num_threads", "1"]
+    common = ["igblastn", "-query", str(query)]
+    custom_internal_data = profile.get("custom_internal_data")
+    if isinstance(custom_internal_data, str) and custom_internal_data:
+        common.extend(("-custom_internal_data", custom_internal_data))
+    else:
+        common.extend(("-organism", str(profile["organism"])))
+    common.extend(("-germline_db_V", str(profile["v_db"])))
+    if isinstance(profile.get("d_db"), str) and profile["d_db"]:
+        common.extend(("-germline_db_D", str(profile["d_db"])))
+    common.extend(("-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-num_threads", "1"))
     airr_command = [*common, "-outfmt", "19", "-out", str(output)]
     detailed_command = [*common, "-show_translation", "-outfmt", "3", "-out", str(detailed_output)]
     environment = {**os.environ, "IGDATA": str(profile["igdata"])}
