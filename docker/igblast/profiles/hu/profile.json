@@ -1,0 +1,10 @@
+{
+  "id": "hu-imgt-202631-1",
+  "version": "202631-1",
+  "organism": "human",
+  "v_db": "/opt/igblast/profiles/hu/databases/imgt_hu_v",
+  "d_db": "/opt/igblast/profiles/hu/databases/imgt_hu_d",
+  "j_db": "/opt/igblast/profiles/hu/databases/imgt_hu_j",
+  "auxiliary_data": "/opt/igblast/profiles/hu/igdata/optional_file/human_gl.aux",
+  "igdata": "/opt/igblast/profiles/hu/igdata"
+}

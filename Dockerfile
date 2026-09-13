@@ -44,11 +44,12 @@ RUN apt-get update \
 
 FROM python:3.12-slim-bookworm AS runtime
 
-ARG IGBLAST_REQUIRED=0
+ARG IGBLAST_REQUIRED=1
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    IGDATA=/opt/igblast \
     PATH=/opt/igblast/bin:/opt/mmseqs2/bin:$PATH
 
 WORKDIR /app
@@ -61,34 +62,67 @@ RUN apt-get update \
         libatomic1 \
         libgomp1 \
         libbz2-1.0 \
+        perl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mmseqs-builder /opt/mmseqs2/ /opt/mmseqs2/
 COPY --from=mmseqs-builder /build/mmseqs2-revision /usr/local/share/mmseqs2-revision
 
-# IgBLAST и IMGT-профили намеренно не загружаются в Dockerfile. До передачи
-# проверенных локальных артефактов обычная dev-сборка остаётся доступной, а
-# V(D)J-сборка с IGBLAST_REQUIRED=1 завершается до публикации образа.
-# Контракт имён, структуры и контрольных сумм — docker/igblast/README.md.
+# IgBLAST 1.22.0 и IMGT/V-QUEST 202631-1 поставляются как зафиксированные
+# исходные архивы. FASTA без IMGT-gap и BLAST-индексы создаются внутри Linux-
+# образа официальными edit_imgt_file.pl и makeblastdb.
 COPY docker/igblast/ /tmp/igblast-source/
 RUN set -eu; \
     if [ "$IGBLAST_REQUIRED" = "1" ]; then \
         test -f /tmp/igblast-source/igblast.sha256; \
+        test -f /tmp/igblast-source/imgt.sha256; \
         set -- /tmp/igblast-source/dist/*.tar.gz; \
         test -f "$1" && test "$#" -eq 1; \
         (cd /tmp/igblast-source && sha256sum --check igblast.sha256); \
+        (cd /tmp/igblast-source && sha256sum --check imgt.sha256); \
         mkdir -p /tmp/igblast-unpack /opt/igblast/bin /opt/igblast/profiles; \
         tar -xzf "$1" -C /tmp/igblast-unpack; \
-        igblastn_path="$(find /tmp/igblast-unpack -type f -name igblastn -print -quit)"; \
-        makeblastdb_path="$(find /tmp/igblast-unpack -type f -name makeblastdb -print -quit)"; \
-        test -n "$igblastn_path" && test -n "$makeblastdb_path"; \
-        install -m 0755 "$igblastn_path" /opt/igblast/bin/igblastn; \
-        install -m 0755 "$makeblastdb_path" /opt/igblast/bin/makeblastdb; \
+        package_root="$(dirname "$(dirname "$(find /tmp/igblast-unpack -type f -name igblastn -print -quit)")")"; \
+        test -x "$package_root/bin/igblastn" && test -x "$package_root/bin/makeblastdb"; \
+        install -m 0755 "$package_root/bin/igblastn" /opt/igblast/bin/igblastn; \
+        install -m 0755 "$package_root/bin/makeblastdb" /opt/igblast/bin/makeblastdb; \
+        install -m 0755 "$package_root/bin/edit_imgt_file.pl" /opt/igblast/bin/edit_imgt_file.pl; \
+        cp -a "$package_root/internal_data" "$package_root/optional_file" /opt/igblast/; \
+        install -m 0644 "$package_root/LICENSE" /opt/igblast/NCBI-LICENSE; \
         test -f /tmp/igblast-source/profiles/manifest.json; \
-        test -f /tmp/igblast-source/profiles/SHA256SUMS; \
-        (cd /tmp/igblast-source/profiles && sha256sum --check SHA256SUMS); \
-        for profile in hu ms rb rt; do test -f "/tmp/igblast-source/profiles/$profile/profile.json"; done; \
         cp -a /tmp/igblast-source/profiles/. /opt/igblast/profiles/; \
+        python -m zipfile -e /tmp/igblast-source/IMGT_V-QUEST_reference_directory.zip /tmp/imgt; \
+        for specification in \
+            'hu:Homo_sapiens:human' \
+            'ms:Mus_musculus:mouse' \
+            'rb:Oryctolagus_cuniculus:rabbit' \
+            'rt:Rattus_norvegicus:rat'; do \
+            profile="${specification%%:*}"; remainder="${specification#*:}"; \
+            species="${remainder%%:*}"; organism="${remainder#*:}"; \
+            source_root="/tmp/imgt/IMGT_V-QUEST_reference_directory/$species/IG"; \
+            profile_root="/opt/igblast/profiles/$profile"; \
+            database_root="$profile_root/databases"; \
+            igdata_root="$profile_root/igdata"; \
+            test -f "$profile_root/profile.json"; \
+            mkdir -p "$database_root/source" "$igdata_root/internal_data" "$igdata_root/optional_file"; \
+            for segment in IGHV IGHD IGHJ IGKV IGKJ IGLV IGLJ; do \
+                test -s "$source_root/$segment.fasta"; \
+                cp "$source_root/$segment.fasta" "$database_root/source/$segment.fasta"; \
+            done; \
+            cat "$source_root/IGHV.fasta" "$source_root/IGKV.fasta" "$source_root/IGLV.fasta" > "$database_root/imgt_${profile}_v.raw.fasta"; \
+            cat "$source_root/IGHJ.fasta" "$source_root/IGKJ.fasta" "$source_root/IGLJ.fasta" > "$database_root/imgt_${profile}_j.raw.fasta"; \
+            cp "$source_root/IGHD.fasta" "$database_root/imgt_${profile}_d.raw.fasta"; \
+            for region in v d j; do \
+                perl /opt/igblast/bin/edit_imgt_file.pl "$database_root/imgt_${profile}_${region}.raw.fasta" > "$database_root/imgt_${profile}_${region}.fasta"; \
+                makeblastdb -parse_seqids -dbtype nucl -in "$database_root/imgt_${profile}_${region}.fasta" -out "$database_root/imgt_${profile}_${region}"; \
+            done; \
+            cp -a "/opt/igblast/internal_data/$organism" "$igdata_root/internal_data/"; \
+            cp "/opt/igblast/optional_file/${organism}_gl.aux" "$igdata_root/optional_file/"; \
+            test -s "$igdata_root/internal_data/$organism/${organism}.ndm.imgt"; \
+            test -s "$igdata_root/optional_file/${organism}_gl.aux"; \
+        done; \
+        (cd /opt/igblast/profiles && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS); \
+        (cd /opt/igblast/profiles && sha256sum --check SHA256SUMS); \
         chmod -R a-w /opt/igblast; \
         command -v igblastn; \
         command -v makeblastdb; \
@@ -96,7 +130,7 @@ RUN set -eu; \
         makeblastdb -version; \
     else \
         mkdir -p /opt/igblast/profiles; \
-        printf '%s\\n' 'V(D)J profile artifacts were not supplied; build with IGBLAST_REQUIRED=1 only after verification.' > /opt/igblast/profiles/UNAVAILABLE; \
+        printf '%s\\n' 'V(D)J support was explicitly disabled with IGBLAST_REQUIRED=0.' > /opt/igblast/profiles/UNAVAILABLE; \
         chmod -R a-w /opt/igblast; \
     fi; \
     rm -rf /tmp/igblast-source /tmp/igblast-unpack

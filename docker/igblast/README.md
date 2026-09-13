@@ -1,55 +1,66 @@
 # Поставка IgBLAST для V(D)J
 
-Этот каталог — локальный build context для V(D)J-образа. Репозиторий
-намеренно не содержит бинарный архив IgBLAST, IMGT FASTA, BLAST-индексы или
-готовые профили: на текущий момент для них не утверждены конкретные release,
-лицензионные notices и SHA-256.
+Dev-образ содержит зафиксированные исходные архивы:
 
-Обычная сборка приложения выполняется без V(D)J-инструмента:
+- NCBI IgBLAST `1.22.0`, Linux x64:
+  `https://ftp.ncbi.nlm.nih.gov/blast/executables/igblast/release/1.22.0/ncbi-igblast-1.22.0-x64-linux.tar.gz`;
+- IMGT/V-QUEST reference directory release `202631-1` от 27 июля 2026 года:
+  `https://www.imgt.org/download/V-QUEST/IMGT_V-QUEST_reference_directory.zip`.
 
-```bash
-docker compose build dev-alignmabzoo
-```
+Контрольные суммы находятся в `igblast.sha256` и `imgt.sha256`. Docker build
+проверяет их до распаковки. IMGT предоставляет данные по CC BY 4.0; лицензия
+NCBI включена в архив IgBLAST и копируется в `/opt/igblast/NCBI-LICENSE`.
 
-Она создаёт `/opt/igblast/profiles/UNAVAILABLE`; V(D)J API обязан вернуть
-русский статус недоступности и не запускать внешний процесс.
+## Что создаётся при сборке
 
-## Утверждённая поставка
+Для `hu`, `ms`, `rb`, `rt` Dockerfile берёт собственные IGHV/IGHD/IGHJ,
+IGKV/IGKJ и IGLV/IGLJ из IMGT. Исходные FASTA сохраняются в
+`profiles/<id>/databases/source/`. V, D и J объединяются отдельно, IMGT-gap
+удаляются официальным `edit_imgt_file.pl`, затем `makeblastdb -parse_seqids`
+создаёт нуклеотидные BLAST-индексы.
 
-После отдельной проверки артефактов их кладут **локально, до Docker build**:
+Из пакета IgBLAST в каждый профиль копируются соответствующие каталоги
+`internal_data`, файл `<organism>_gl.aux` и `.ndm.imgt`. Итоговая структура
+внутри контейнера:
 
 ```text
-docker/igblast/
-├── dist/
-│   └── <проверенный-linux-igblast-архив>.tar.gz
-├── igblast.sha256
+/opt/igblast/
+├── bin/{igblastn,makeblastdb,edit_imgt_file.pl}
+├── internal_data/
+├── optional_file/
 └── profiles/
     ├── manifest.json
     ├── SHA256SUMS
-    ├── hu/
-    ├── ms/
-    ├── rb/
-    └── rt/
+    ├── hu/{profile.json,databases/,igdata/}
+    ├── ms/{profile.json,databases/,igdata/}
+    ├── rb/{profile.json,databases/,igdata/}
+    └── rt/{profile.json,databases/,igdata/}
 ```
 
-`igblast.sha256` имеет обычный формат `sha256sum --check` и содержит ровно
-одну запись для файла из `dist/`. В архиве должны быть исполняемые файлы
-`igblastn` и `makeblastdb`. URL, версия, дата получения, лицензия и SHA-256
-записываются в `profiles/manifest.json` и в утверждённый журнал поставки.
-Dockerfile не получает их из сети и не выбирает «последнюю» версию сам.
+`SHA256SUMS` для всех файлов готовых профилей создаётся и сразу проверяется
+при сборке. `/opt/igblast` после этого переводится в read-only.
 
-V(D)J-образ разрешено собрать только явно:
+## Сборка на сервере
+
+После `git pull` дополнительные загрузки не нужны:
 
 ```bash
-docker compose build --build-arg IGBLAST_REQUIRED=1 dev-alignmabzoo
+docker compose build --no-cache dev-alignmabzoo
+docker compose -p dev-alignmabzoo up -d dev-alignmabzoo
 ```
 
-Сборка обязана остановиться, если нет архива, checksum-файла, общего manifest,
-любой из папок `hu`, `ms`, `rb`, `rt` или если хотя бы одна checksum не
-совпадает. После успешной сборки в runtime доступны только локальные
-`/opt/igblast/bin/igblastn`, `/opt/igblast/bin/makeblastdb` и read-only
-`/opt/igblast/profiles`.
+Проверка установки:
 
-Не добавляйте артефакты в Git без отдельно подтверждённого права на их
-распространение. Нельзя заменять отсутствующий профиль базой другого вида и
-нельзя использовать `-remote`.
+```bash
+docker compose -p dev-alignmabzoo exec dev-alignmabzoo igblastn -version
+docker compose -p dev-alignmabzoo exec dev-alignmabzoo makeblastdb -version
+docker compose -p dev-alignmabzoo exec dev-alignmabzoo \
+  sh -lc 'cd /opt/igblast/profiles && sha256sum --check SHA256SUMS'
+```
+
+Для диагностической сборки без V(D)J можно явно передать
+`--build-arg IGBLAST_REQUIRED=0`. Такой образ создаёт marker
+`/opt/igblast/profiles/UNAVAILABLE`, и backend возвращает статус
+`unavailable` без запуска процесса.
+
+Подмена профиля близким видом и использование `igblastn -remote` запрещены.

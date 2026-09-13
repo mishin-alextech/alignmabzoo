@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import os
 import shutil
 import subprocess
 from collections import defaultdict
@@ -142,10 +143,10 @@ def _load_profile(animal: str) -> tuple[dict[str, Any] | None, str]:
         return None, "Профиль IMGT повреждён или недоступен."
     if not isinstance(profile, dict):
         return None, "Профиль IMGT имеет недопустимый формат."
-    required = ("id", "version", "organism", "v_db", "d_db", "j_db", "auxiliary_data")
+    required = ("id", "version", "organism", "v_db", "d_db", "j_db", "auxiliary_data", "igdata")
     if not all(isinstance(profile.get(key), str) and profile[key] for key in required):
         return None, "Профиль IMGT не содержит обязательные параметры IgBLAST."
-    if not all(_profile_path_safe(profile[key]) for key in ("v_db", "d_db", "j_db", "auxiliary_data")):
+    if not all(_profile_path_safe(profile[key]) for key in ("v_db", "d_db", "j_db", "auxiliary_data", "igdata")):
         return None, "Профиль IMGT содержит небезопасный путь к базе."
     return profile, ""
 
@@ -164,7 +165,8 @@ def _run_profile(directory: Path, animal: str, entries: Sequence[Mapping[str, An
     query.write_text("".join(f">{item['id']}\n{_normalise_dna(str(item['nucleotide_sequence']))}\n" for item in entries), encoding="utf-8")
     output = root / "rearrangements.tsv"
     command = ["igblastn", "-query", str(query), "-organism", str(profile["organism"]), "-germline_db_V", str(profile["v_db"]), "-germline_db_D", str(profile["d_db"]), "-germline_db_J", str(profile["j_db"]), "-auxiliary_data", str(profile["auxiliary_data"]), "-domain_system", "imgt", "-outfmt", "19", "-out", str(output), "-num_threads", "1"]
-    completed = subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)
+    environment = {**os.environ, "IGDATA": str(profile["igdata"])}
+    completed = subprocess.run(command, cwd=root, env=environment, check=False, capture_output=True, text=True)
     metadata = {"animal": animal, "profile_id": profile["id"], "argv": command, "returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
     _log(directory, f"IgBLAST {animal}: код {completed.returncode}.")
     if completed.stdout:
