@@ -322,7 +322,14 @@ def _report_section(block: str, marker: str, end_markers: Sequence[str]) -> str 
         position = block.find(end_marker, start + len(marker))
         if position >= 0:
             end = min(end, position)
-    value = block[start + len(marker):end].strip()
+    lines = block[start + len(marker):end].splitlines()
+    first = 0
+    last = len(lines)
+    while first < last and not lines[first].strip():
+        first += 1
+    while last > first and not lines[last - 1].strip():
+        last -= 1
+    value = "\n".join(lines[first:last])
     return value or None
 
 
