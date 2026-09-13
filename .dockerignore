@@ -1,7 +1,7 @@
 .git
 .agents
 .codex
-
+.md
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
