@@ -265,8 +265,6 @@ def _detailed_sections(block: str) -> dict[str, Any]:
     return {
         "query_length": int(length_match.group(1)) if length_match else None,
         "significant_alignments": _report_section(block, "Sequences producing significant alignments:", ("Domain classification requested:", "V-(D)-J rearrangement summary")),
-        "junction_details": _report_section(block, "V-(D)-J junction details based on top germline gene matches:", ("Alignment summary between query and top germline V gene hit:", "Alignments")),
-        "alignment_summary": _report_section(block, "Alignment summary between query and top germline V gene hit:", ("Alignments",)),
         "alignments": _report_section(block, "Alignments", ("Lambda      K", "Effective search space used:")),
     }
 
@@ -299,7 +297,10 @@ def _append_tsv(directory: Path, source: Path, animal: str) -> None:
 
 
 def _result_from_airr(sequence_id: str, row: Mapping[str, str], details: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
-    return {"sequence_id": sequence_id, "status": "ready", "reason": None, "profile_id": profile["id"], "profile_version": profile["version"], "tool_version": None, "v_calls": _calls(row.get("v_call")), "d_calls": _calls(row.get("d_call")), "j_calls": _calls(row.get("j_call")), "locus": _none(row.get("locus")), "junction": {"nt": _none(row.get("junction")), "aa": _none(row.get("junction_aa"))}, "metrics": {"identity": _number(row.get("v_identity") or row.get("v_identity_aa")), "alignment_length": _number(row.get("v_alignment_length")), "coverage": _number(row.get("v_support")), "score": _number(row.get("v_score")), "evalue": _number(row.get("v_evalue"))}, "details": dict(details)}
+    query_length = details.get("query_length")
+    alignment_length = _coordinate_span(row.get("v_sequence_start"), row.get("v_sequence_end"))
+    coverage = round(alignment_length * 100 / query_length, 3) if alignment_length is not None and isinstance(query_length, int) and query_length > 0 else None
+    return {"sequence_id": sequence_id, "status": "ready", "reason": None, "profile_id": profile["id"], "profile_version": profile["version"], "tool_version": None, "v_calls": _calls(row.get("v_call")), "d_calls": _calls(row.get("d_call")), "j_calls": _calls(row.get("j_call")), "locus": _none(row.get("locus")), "junction": {"nt": _none(row.get("junction")), "aa": _none(row.get("junction_aa"))}, "metrics": {"identity": _number(row.get("v_identity") or row.get("v_identity_aa")), "alignment_length": alignment_length, "coverage": coverage, "score": _number(row.get("v_score")), "evalue": _number(row.get("v_support"))}, "details": dict(details)}
 
 
 def _unavailable(sequence_id: str, reason: str, profile: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -315,7 +316,15 @@ def _ambiguous(sequence_id: str, reason: str, profile: Mapping[str, Any]) -> dic
 
 
 def _empty_result(sequence_id: str, status: str, reason: str, profile: Mapping[str, Any] | None) -> dict[str, Any]:
-    return {"sequence_id": sequence_id, "status": status, "reason": reason, "profile_id": profile.get("id") if profile else None, "profile_version": profile.get("version") if profile else None, "tool_version": None, "v_calls": [], "d_calls": [], "j_calls": [], "locus": None, "junction": {"nt": None, "aa": None}, "metrics": {"identity": None, "alignment_length": None, "coverage": None, "score": None, "evalue": None}, "details": {"query_length": None, "significant_alignments": None, "junction_details": None, "alignment_summary": None, "alignments": None}}
+    return {"sequence_id": sequence_id, "status": status, "reason": reason, "profile_id": profile.get("id") if profile else None, "profile_version": profile.get("version") if profile else None, "tool_version": None, "v_calls": [], "d_calls": [], "j_calls": [], "locus": None, "junction": {"nt": None, "aa": None}, "metrics": {"identity": None, "alignment_length": None, "coverage": None, "score": None, "evalue": None}, "details": {"query_length": None, "significant_alignments": None, "alignments": None}}
+
+
+def _coordinate_span(start: str | None, end: str | None) -> int | None:
+    start_value = _number(start)
+    end_value = _number(end)
+    if not isinstance(start_value, int) or not isinstance(end_value, int) or end_value < start_value:
+        return None
+    return end_value - start_value + 1
 
 
 def _write_result(directory: Path, parent_job_id: str | None, records: Sequence[Mapping[str, Any]], commands: Sequence[Mapping[str, Any]]) -> None:

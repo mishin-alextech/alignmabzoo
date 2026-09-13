@@ -1,4 +1,4 @@
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, CircularProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, CircularProgress, Paper, Stack, Typography } from '@mui/material'
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type AlignmentSequence, type Job, type VdjCall, type VdjRecord, type VdjResult } from '../api/client'
 
@@ -24,6 +24,12 @@ function callLabel(call: VdjCall | string): string {
 function metric(value: number | null | undefined, digits = 3): string {
   if (value === null || value === undefined) return '—'
   return Number.isFinite(value) ? value.toFixed(digits) : '—'
+}
+
+function evalue(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  if (value === 0) return '0'
+  return value.toExponential(2)
 }
 
 function Calls({ label, calls }: { label: string; calls?: Array<VdjCall | string> }) {
@@ -59,11 +65,10 @@ function RecordDetails({ record, cloneName }: { record: VdjRecord; cloneName: st
       <Box>
         <Typography variant="subtitle2">Query= {cloneName} &nbsp; Length={details?.query_length ?? '—'}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          V: {(record.v_calls ?? []).map(callLabel).join(', ') || '—'} · D: {(record.d_calls ?? []).map(callLabel).join(', ') || '—'} · J: {(record.j_calls ?? []).map(callLabel).join(', ') || '—'} · Score: {metric(metrics?.score)} · E-value: {metric(metrics?.evalue)}
+          V: {(record.v_calls ?? []).map(callLabel).join(', ') || '—'} · D: {(record.d_calls ?? []).map(callLabel).join(', ') || '—'} · J: {(record.j_calls ?? []).map(callLabel).join(', ') || '—'} · Score: {metric(metrics?.score)} · E-value: {evalue(metrics?.evalue)}
         </Typography>
       </Box>
       <ReportBlock title="Sequences producing significant alignments" text={details?.significant_alignments} />
-      <ReportBlock title="V-(D)-J junction details based on top germline gene matches" text={details?.junction_details} />
       <Box>
         <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Краткий результат</Typography>
         <Stack spacing={0.25}>
@@ -73,12 +78,11 @@ function RecordDetails({ record, cloneName }: { record: VdjRecord; cloneName: st
           <Typography variant="body2"><strong>Локус:</strong> {record.locus || '—'}</Typography>
           <Typography variant="body2"><strong>Junction, нуклеотиды:</strong> {record.junction?.nt || '—'}</Typography>
           <Typography variant="body2"><strong>Junction, аминокислоты:</strong> {record.junction?.aa || '—'}</Typography>
-          <Typography variant="body2"><strong>Идентичность:</strong> {metric(metrics?.identity)} · <strong>Покрытие:</strong> {metric(metrics?.coverage)} · <strong>Длина:</strong> {metrics?.alignment_length ?? '—'}</Typography>
+          <Typography variant="body2"><strong>Идентичность:</strong> {metric(metrics?.identity)}% · <strong>Покрытие V:</strong> {metric(metrics?.coverage)}% · <strong>Длина V:</strong> {metrics?.alignment_length ?? '—'} нт · <strong>E-value:</strong> {evalue(metrics?.evalue)}</Typography>
           {record.profile_id && <Typography variant="body2"><strong>Профиль:</strong> {record.profile_id}</Typography>}
           {record.tool_version && <Typography variant="body2"><strong>IgBLAST:</strong> {record.tool_version}</Typography>}
         </Stack>
       </Box>
-      <ReportBlock title="Alignment summary between query and top germline V gene hit" text={details?.alignment_summary} />
       <ReportBlock title="Alignments" text={details?.alignments} />
     </Stack>
   )
@@ -141,36 +145,33 @@ export function VdjResults({ jobId }: Props) {
         </Box>
         {job.status === 'partial' && <Alert severity="info">Часть записей не обработана. Причины указаны в строках.</Alert>}
         <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
-          <Table size="small">
-            <TableHead><TableRow><TableCell>Группа / клон</TableCell><TableCell>Цепь</TableCell><TableCell>Животное / профиль</TableCell><TableCell>Статус</TableCell></TableRow></TableHead>
-            <TableBody>
-              {result.records.map((record) => {
-                const context = sequences.get(record.sequence_id)
-                const sequence = context?.sequence
-                return <TableRow key={record.sequence_id} hover>
-                  <TableCell colSpan={4} sx={{ p: 0 }}>
-                    <Accordion disableGutters elevation={0} square>
-                      <AccordionSummary expandIcon={<span aria-hidden="true">⌄</span>}>
-                        <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '2fr 1fr 1fr 1fr' }} gap={1} width="100%" alignItems="center">
-                          <Typography>{sourceLabel(sequence)}</Typography>
-                          <Typography>{context?.chainGroup ?? '—'}</Typography>
-                          <Typography>{sequence?.source?.animal ?? '—'}{record.profile_id ? ` / ${record.profile_id}` : ''}</Typography>
-                          <Typography>{recordStatus(record.status)}</Typography>
-                        </Box>
-                      </AccordionSummary>
-                      <AccordionDetails><RecordDetails record={record} cloneName={sourceLabel(sequence)} /></AccordionDetails>
-                    </Accordion>
-                  </TableCell>
-                </TableRow>
-              })}
-            </TableBody>
-          </Table>
+          <Box sx={{ minWidth: 880 }}>
+            <Box display="grid" gridTemplateColumns="minmax(0, 2fr) repeat(3, minmax(0, 1fr)) 24px" gap={2} alignItems="center" px={2} py={1.5} borderBottom={1} borderColor="divider" bgcolor="grey.50">
+              <Typography variant="subtitle2">Группа / клон</Typography>
+              <Typography variant="subtitle2">Цепь</Typography>
+              <Typography variant="subtitle2">Животное / профиль</Typography>
+              <Typography variant="subtitle2">Статус</Typography>
+              <span />
+            </Box>
+            {result.records.map((record) => {
+              const context = sequences.get(record.sequence_id)
+              const sequence = context?.sequence
+              return <Accordion key={record.sequence_id} disableGutters elevation={0} square>
+                <AccordionSummary
+                  expandIcon={<span aria-hidden="true">⌄</span>}
+                  sx={{ px: 2, '& .MuiAccordionSummary-content': { display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) repeat(3, minmax(0, 1fr))', gap: 2, my: 1.5 } }}
+                >
+                  <Typography>{sourceLabel(sequence)}</Typography>
+                  <Typography>{context?.chainGroup ?? '—'}</Typography>
+                  <Typography>{sequence?.source?.animal ?? '—'}{record.profile_id ? ` / ${record.profile_id}` : ''}</Typography>
+                  <Typography>{recordStatus(record.status)}</Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ px: 2, pb: 2 }}><RecordDetails record={record} cloneName={sourceLabel(sequence)} /></AccordionDetails>
+              </Accordion>
+            })}
+          </Box>
         </Paper>
         {result.records.length === 0 && <Alert severity="info">В этой задаче нет записей для V(D)J-анализа.</Alert>}
-        <Box display="flex" gap={1} flexWrap="wrap">
-          {result.records.some((record) => record.status === 'ready' || record.status === 'ambiguous') && <Button component="a" href={api.vdjTsvDownloadUrl(jobId)} variant="outlined">Скачать TSV</Button>}
-          <Button component="a" href={api.vdjManifestDownloadUrl(jobId)} variant="outlined">Скачать manifest</Button>
-        </Box>
       </Stack>
     </Box>
   )

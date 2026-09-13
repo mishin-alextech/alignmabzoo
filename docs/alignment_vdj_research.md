@@ -177,8 +177,6 @@ metrics: {identity, alignment_length, coverage, score, evalue}
 details: {
   query_length,
   significant_alignments,
-  junction_details,
-  alignment_summary,
   alignments
 }
 germline_differences[]  # отложено для первого UI
